@@ -6,8 +6,8 @@ export default async function handler(req,res){
  if(req.method!=='GET')return res.status(405).send('Method not allowed');
  const cookies=Object.fromEntries((req.headers.cookie||'').split(';').map(x=>x.trim().split('=').map(decodeURIComponent)).filter(x=>x.length===2));
  const state=cookies.fixar_shopee_state;
- const {code,shop_id}=req.query;
- if(!state||!code||!shop_id||!/^[0-9]+$/.test(String(shop_id)))return res.status(400).send('Autorização inválida ou expirada. Reinicie a conexão pelo escritório.');
+ const {code,shop_id,state:returnedState}=req.query;
+ if(!state||!returnedState||returnedState!==state||!code||!shop_id||!/^[0-9]+$/.test(String(shop_id)))return res.status(400).send('Autorização inválida ou expirada. Reinicie a conexão pelo escritório.');
  try{
   const records=await db('shopee_oauth_states?state_hash=eq.'+hash(state)+'&select=state_hash,expires_at&limit=1');
   if(!Array.isArray(records)||records.length!==1||Date.parse(records[0].expires_at)<Date.now())return res.status(400).send('Autorização expirada. Tente novamente.');
