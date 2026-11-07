@@ -7,6 +7,8 @@ export default async function handler(req,res){
  if(!await requireAdmin(req,res))return;
  if(req.body?.action==='edit_sandbox_title')return editSandboxProduct(req,res);
  if(req.body?.action==='auto_optimize_sandbox')return autoOptimizeSandbox(req,res);
+ if(req.body?.action==='product_change_history')return productChangeHistory(req,res);
+ if(req.body?.action==='undo_product_change')return undoProductChange(req,res);
  const key=process.env.GEMINI_API_KEY;
  if(!key)return res.status(503).json({error:'gemini_key_not_configured'});
  const {message,history=[]}=req.body||{};
@@ -167,9 +169,65 @@ async function autoOptimizeSandbox(req,res){
      saved=String((verify.item_list||[])[0]?.item_name||'').trim();
      if(saved===title)break;
     }
-    report.push({itemId,oldTitle,newTitle:title,status:saved===title?'verified':'submitted_unverified',savedTitle:saved||null,reason:saved===title?null:'A API não confirmou o novo título após três consultas'});
+    const status=saved===title?'verified':'submitted_unverified';
+    let auditId=null;
+    try{
+     const rows=await db('product_agent_changes?select=id',{method:'POST',prefer:'return=representation',body:{store_id:shop.id,item_id:itemId,previous_title:oldTitle,new_title:title,status}});
+     auditId=rows?.[0]?.id||null;
+    }catch{}
+    report.push({itemId,oldTitle,newTitle:title,status,savedTitle:saved||null,auditId,reason:saved===title?null:'A API não confirmou o novo título após três consultas'});
    }catch(e){report.push({itemId,oldTitle,status:'failed',reason:String(e.message||e).slice(0,200)});}
   }
   return res.status(200).json({results:report,shopId,model,limit:maxItems});
  }catch(e){return res.status(503).json({error:'sandbox_auto_optimize_failed',detail:String(e.message||e).slice(0,200),results:report});}
+}
+
+async function productChangeHistory(req,res){
+ if(process.env.SHOPEE_ENV!=='sandbox')return res.status(403).json({error:'sandbox_only'});
+ try{
+  const stores=await db('marketplace_stores?provider=eq.shopee&status=eq.connected&select=id&order=created_at.desc&limit=1');
+  if(!stores?.length)return res.status(409).json({error:'store_not_connected'});
+  const rows=await db('product_agent_changes?store_id=eq.'+stores[0].id+'&select=id,item_id,previous_title,new_title,status,created_at,reverted_at&order=created_at.desc&limit=30');
+  return res.status(200).json({changes:rows||[]});
+ }catch{return res.status(503).json({error:'audit_table_not_ready',hint:'Execute a migração 003 no Supabase'});}
+}
+async function undoProductChange(req,res){
+ if(process.env.SHOPEE_ENV!=='sandbox')return res.status(403).json({error:'sandbox_only'});
+ const changeId=Number(req.body?.changeId);
+ if(!Number.isSafeInteger(changeId)||changeId<=0)return res.status(400).json({error:'invalid_change_id'});
+ try{
+  const stores=await db('marketplace_stores?provider=eq.shopee&status=eq.connected&select=id,external_shop_id&order=created_at.desc&limit=1');
+  if(!stores?.length)return res.status(409).json({error:'store_not_connected'});
+  const shop=stores[0];
+  const rows=await db('product_agent_changes?id=eq.'+changeId+'&store_id=eq.'+shop.id+'&select=id,item_id,previous_title,new_title,status,reverted_at&limit=1');
+  const change=rows?.[0];
+  if(!change||change.reverted_at||change.status!=='verified')return res.status(409).json({error:'change_not_revertible'});
+  const auth=await accessTokenForStore(shop);
+  if(auth.error)return res.status(409).json({error:auth.error});
+  const {id,key}=config(),shopId=Number(shop.external_shop_id);
+  async function call(path,method,params={},body){
+   const ts=Math.floor(Date.now()/1000),url=new URL(apiBase()+path);
+   for(const [k,v] of Object.entries({partner_id:id,timestamp:ts,access_token:auth.token,shop_id:shopId,sign:shopSign(id,path,ts,auth.token,shopId,key),...params}))url.searchParams.set(k,String(v));
+   const response=await fetch(url,{method,headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(12000)});
+   const data=await response.json().catch(()=>({}));
+   if(!response.ok||data.error)throw Error('shopee_'+String(data.error||response.status));
+   return data.response||{};
+  }
+  const detail=await call('/api/v2/product/get_item_base_info','GET',{item_id_list:String(change.item_id)});
+  const current=String((detail.item_list||[])[0]?.item_name||'').trim();
+  if(current!==change.new_title)return res.status(409).json({error:'title_changed_since_edit',currentTitle:current});
+  const later=await db('product_agent_changes?store_id=eq.'+shop.id+'&item_id=eq.'+change.item_id+'&created_at=gt.'+encodeURIComponent((await db('product_agent_changes?id=eq.'+changeId+'&select=created_at'))[0].created_at)+'&select=id&limit=1');
+  if(later?.length)return res.status(409).json({error:'newer_edit_exists'});
+  await call('/api/v2/product/update_item','POST',{}, {item_id:Number(change.item_id),item_name:change.previous_title});
+  let saved='';
+  for(let i=0;i<3;i++){
+   await new Promise(resolve=>setTimeout(resolve,1000));
+   const result=await call('/api/v2/product/get_item_base_info','GET',{item_id_list:String(change.item_id)});
+   saved=String((result.item_list||[])[0]?.item_name||'').trim();
+   if(saved===change.previous_title)break;
+  }
+  if(saved!==change.previous_title)return res.status(409).json({error:'undo_submitted_unverified',currentTitle:saved});
+  await db('product_agent_changes?id=eq.'+changeId+'&store_id=eq.'+shop.id,{method:'PATCH',prefer:'return=minimal',body:{status:'reverted',reverted_at:new Date().toISOString()}});
+  return res.status(200).json({success:true,itemId:change.item_id,restoredTitle:change.previous_title});
+ }catch(e){return res.status(503).json({error:'undo_failed',detail:String(e.message||e).slice(0,180)});}
 }
