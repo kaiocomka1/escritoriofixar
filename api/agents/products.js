@@ -19,20 +19,7 @@ export default async function handler(req,res){
    const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:payload,signal:AbortSignal.timeout(25000)});
    return {response,data:await response.json().catch(()=>({})),model,version};
   }
-  let result=await generate(requestedModel);
-  if(result.response.status===404){
-   result=await generate(requestedModel,'v1');
-  }
-  if(result.response.status===404){
-   const listing=await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=100',{headers:{'x-goog-api-key':key},signal:AbortSignal.timeout(12000)});
-   if(listing.ok){
-    const available=await listing.json();
-    const choices=(available.models||[]).filter(m=>m.supportedGenerationMethods?.includes('generateContent')).map(m=>m.name?.startsWith('models/')?m.name.slice(7):m.name).filter(Boolean);
-    const preferred=['gemini-2.5-flash-lite','gemini-flash-lite-latest','gemini-2.5-flash','gemini-flash-latest'];
-    const fallback=preferred.find(m=>m!==requestedModel&&choices.includes(m));
-    if(fallback)result=await generate(fallback,'v1');
-   }
-  }
+  const result=await generate(requestedModel);
   const {response,data,model,version}=result;
   if(!response.ok){
    const providerMessage=typeof data.error?.message==='string'?data.error.message.slice(0,300):null;
