@@ -32,7 +32,10 @@ export default async function handler(req,res){
   stage='request_shopee';
   const response=await fetch(url,{headers:{Accept:'application/json'},signal:AbortSignal.timeout(12000)});
   stage='parse_shopee_response';
-  const result=await response.json();
+  const contentType=response.headers.get('content-type')||'';
+  if(!contentType.toLowerCase().includes('application/json'))return res.status(502).json({error:'shopee_non_json_response',httpStatus:response.status,responseType:contentType.split(';')[0]||'unknown'});
+  let result;
+  try{result=await response.json()}catch{return res.status(502).json({error:'shopee_invalid_json',httpStatus:response.status});}
   if(!response.ok||result.error)return res.status(502).json({error:'shopee_api_error',providerError:String(result.error||response.status).slice(0,120),providerMessage:String(result.message||'').slice(0,200)});
   if(kind==='products')return res.status(200).json({kind,shopId,items:(result.response?.item||[]).map(x=>({itemId:x.item_id,status:x.item_status,updatedAt:x.update_time})),hasNext:!!result.response?.has_next_page});
   return res.status(200).json({kind,shopId,orders:(result.response?.order_list||[]).map(x=>({orderSn:x.order_sn,status:x.order_status})),hasNext:!!result.response?.more});
