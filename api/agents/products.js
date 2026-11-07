@@ -2,6 +2,14 @@ import {evaluatePricing} from '../_lib/pricing.js';
 import {apiBase,config,db,accessTokenForStore,shopSign} from '../_lib/shopee.js';
 import {requireAdmin} from '../_lib/admin.js';
 const SYSTEM='Você é o Agente de Produtos do Fixar+ AI Office, especialista em anúncios de marketplace brasileiro, principalmente Shopee. Responda em português do Brasil, de forma prática e concisa. Ajude com SEO, títulos, descrições, objeções, precificação e conversão. Nunca invente dados de vendas, taxas ou métricas. Não alegue ter consultado a Shopee quando não houver dados fornecidos. Você possui ferramentas integradas para consultar o catálogo e otimizar títulos na Shopee Sandbox. Nunca peça ao administrador que copie títulos ou descrições já disponíveis pela integração. Se o pedido for sobre anúncios da loja, consulte os dados disponíveis. Somente declare uma alteração executada quando a ferramenta retornar confirmação. Não realize ações fiscais. Evite promessas sem comprovação, como capacidade de carga não testada. Quando faltar dado importante, solicite-o.';
+const AGENTS={
+ thor:{name:'Thor',role:'Produtos',instruction:'Especialista em produtos, SEO e anúncios. Comunicativo, criterioso e proativo. Analise apenas dados disponíveis; nunca afirme ter publicado sem confirmação da ferramenta.'},
+ rarissa:{name:'Rarissa',role:'Financeiro',instruction:'Analista financeira objetiva e firme. A margem líquida mínima projetada é 15%. Nunca autorize preços sem custos completos. O motor financeiro deve validar cálculos. Não invente informações fiscais.'},
+ arthur:{name:'Arthur',role:'Marketing',instruction:'Especialista em marketing e anúncios pagos, pragmático e orientado a lucro. Diferencie ROAS, faturamento e margem. Não invente métricas.'},
+ penha:{name:'Penha',role:'Estoque',instruction:'Gestora de estoque preventiva, organizada e direta. Não afirme ter consultado inventário sem ferramenta ou dados.'},
+ isaura:{name:'Isaura',role:'Logística',instruction:'Especialista em logística, objetiva e atenta a prazos. Não afirme ter despachado pedidos sem confirmação.'},
+ alex:{name:'Alex',role:'Gestor Geral',instruction:'Gestor estratégico, direto e questionador. Coordene recomendações, mas não finja comunicação entre agentes sem integração real.'}
+};
 export default async function handler(req,res){
  res.setHeader('Cache-Control','no-store');
  if(req.method!=='POST')return res.status(405).json({error:'method_not_allowed'});
@@ -14,6 +22,9 @@ export default async function handler(req,res){
  const key=process.env.GEMINI_API_KEY;
  if(!key)return res.status(503).json({error:'gemini_key_not_configured'});
  const {message,history=[]}=req.body||{};
+ const agentId=typeof req.body?.agentId==='string'?req.body.agentId.toLowerCase():'thor';
+ const agent=AGENTS[agentId];
+ if(!agent)return res.status(400).json({error:'invalid_agent'});
  if(typeof message!=='string'||!message.trim()||message.length>4000||!Array.isArray(history))return res.status(400).json({error:'invalid_message'});
  const command=message.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');
  const mentionsCatalog=/(shopee|anunci|titulo|produto|catalog|seo|listagem)/.test(command);
@@ -21,7 +32,7 @@ export default async function handler(req,res){
  const asksOptimize=mentionsCatalog&&requestsImprovement;
  const asksHistory=/(historico|registro|desfazer|reverter|o que mudou|ultimas alteracoes|alteracoes anteriores|mudancas anteriores)/.test(command)&&!requestsImprovement;
  const asksPreview=/(simul|suger|sugir|sugest|propost|sem publicar|sem alterar|nao publi|nao alter|antes de publicar|analise primeiro|avali|audit|analis|oportunidade)/.test(command)&&!/(pode publicar|publique|publicar agora|aplique|execute|otimize agora)/.test(command);
- if(process.env.SHOPEE_ENV==='sandbox'&&asksOptimize){
+ if(agentId==='thor'&&process.env.SHOPEE_ENV==='sandbox'&&asksOptimize){
   const result=await invokeAgentAction(autoOptimizeSandbox,req,{...req.body,action:'auto_optimize_sandbox',preview:asksPreview});
   if(result.status!==200)return res.status(result.status).json(result.data);
   const rows=result.data.results||[];
@@ -36,13 +47,13 @@ export default async function handler(req,res){
   }).join('\n\n');
   return res.status(200).json({answer:(asksPreview?'Analisei os anúncios disponíveis na Shopee Sandbox e preparei estas sugestões:':'Confira o resultado da otimização na Shopee Sandbox:')+'\n\n'+(summary||'Nenhum produto encontrado.'),operation:'optimize',report:result.data});
  }
- if(process.env.SHOPEE_ENV==='sandbox'&&asksHistory){
+ if(agentId==='thor'&&process.env.SHOPEE_ENV==='sandbox'&&asksHistory){
   const result=await invokeAgentAction(productChangeHistory,req,{...req.body,action:'product_change_history'});
   if(result.status!==200)return res.status(result.status).json(result.data);
   const rows=result.data.changes||[];
   return res.status(200).json({answer:rows.length?'Últimas alterações:\n'+rows.slice(0,10).map(x=>'#'+x.item_id+' · '+x.status+' · '+x.new_title).join('\n'):'Ainda não há alterações registradas.',operation:'history'});
  }
- const includeShopee=req.body?.includeShopee===true||mentionsCatalog;
+ const includeShopee=agentId==='thor'&&(req.body?.includeShopee===true||mentionsCatalog);
  let shopeeContext='';
  let shopeeInfo=null;
  if(includeShopee){
@@ -76,7 +87,7 @@ export default async function handler(req,res){
  try{
   const configuredModel=process.env.GEMINI_MODEL||'gemini-3.5-flash-lite';
   const requestedModel=configuredModel.startsWith('models/')?configuredModel.slice(7):configuredModel;
-  const payload=JSON.stringify({systemInstruction:{parts:[{text:SYSTEM}]},contents,generationConfig:{maxOutputTokens:900,temperature:0.5}});
+  const payload=JSON.stringify({systemInstruction:{parts:[{text:SYSTEM+' Você é '+agent.name+', agente de '+agent.role+'. '+agent.instruction+' Fale com naturalidade e concisão, como colega de trabalho, sem fingir ser humano. Se não tiver uma ferramenta integrada para executar uma operação, explique a limitação com clareza.'}]},contents,generationConfig:{maxOutputTokens:900,temperature:0.5}});
   async function generate(model,version='v1beta'){
    const url='https://generativelanguage.googleapis.com/'+version+'/models/'+encodeURIComponent(model)+':generateContent';
    const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:payload,signal:AbortSignal.timeout(25000)});
