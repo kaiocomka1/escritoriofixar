@@ -5,7 +5,7 @@ export default async function handler(req,res){
  if(!await requireAdmin(req,res))return;
  const key=process.env.GEMINI_API_KEY;
  if(!key)return res.status(503).json({error:'gemini_key_not_configured'});
- const models=['gemini-2.5-flash-lite','gemini-2.5-flash'];
+ const models=['gemini-3.5-flash-lite','gemini-3.8-flash'];
  const checks=[];
  for(const model of models){
   try{
