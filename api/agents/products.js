@@ -14,24 +14,30 @@ export default async function handler(req,res){
   const configuredModel=process.env.GEMINI_MODEL||'gemini-2.5-flash-lite';
   const requestedModel=configuredModel.startsWith('models/')?configuredModel.slice(7):configuredModel;
   const payload=JSON.stringify({systemInstruction:{parts:[{text:SYSTEM}]},contents,generationConfig:{maxOutputTokens:900,temperature:0.5}});
-  async function generate(model){
-   const url='https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent';
+  async function generate(model,version='v1beta'){
+   const url='https://generativelanguage.googleapis.com/'+version+'/models/'+encodeURIComponent(model)+':generateContent';
    const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:payload,signal:AbortSignal.timeout(25000)});
-   return {response,data:await response.json().catch(()=>({})),model};
+   return {response,data:await response.json().catch(()=>({})),model,version};
   }
   let result=await generate(requestedModel);
+  if(result.response.status===404){
+   result=await generate(requestedModel,'v1');
+  }
   if(result.response.status===404){
    const listing=await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=100',{headers:{'x-goog-api-key':key},signal:AbortSignal.timeout(12000)});
    if(listing.ok){
     const available=await listing.json();
     const choices=(available.models||[]).filter(m=>m.supportedGenerationMethods?.includes('generateContent')).map(m=>m.name?.startsWith('models/')?m.name.slice(7):m.name).filter(Boolean);
-    const preferred=['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-2.0-flash-lite','gemini-2.0-flash','gemini-1.5-flash'];
-    const fallback=preferred.find(m=>m!==requestedModel&&choices.includes(m))||choices.filter(m=>m!==requestedModel&&m.startsWith('gemini-')&&m.includes('flash')&&!m.includes('preview')&&!m.includes('exp')).sort((a,b)=>a.localeCompare(b)).at(-1);
-    if(fallback)result=await generate(fallback);
+    const preferred=['gemini-2.5-flash-lite','gemini-flash-lite-latest','gemini-2.5-flash','gemini-flash-latest'];
+    const fallback=preferred.find(m=>m!==requestedModel&&choices.includes(m));
+    if(fallback)result=await generate(fallback,'v1');
    }
   }
-  const {response,data,model}=result;
-  if(!response.ok)return res.status(response.status===429?429:502).json({error:response.status===429?'gemini_quota_exceeded':'gemini_provider_error',providerStatus:response.status,providerCode:typeof data.error?.status==='string'?data.error.status.slice(0,60):null,model});
+  const {response,data,model,version}=result;
+  if(!response.ok){
+   const providerMessage=typeof data.error?.message==='string'?data.error.message.slice(0,300):null;
+   return res.status(response.status===429?429:502).json({error:response.status===429?'gemini_quota_exceeded':'gemini_provider_error',providerStatus:response.status,providerCode:typeof data.error?.status==='string'?data.error.status.slice(0,60):null,providerMessage,model,apiVersion:version});
+  }
   const answer=(data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('').trim();
   if(!answer)return res.status(502).json({error:'empty_gemini_response'});
   return res.status(200).json({answer,model});
