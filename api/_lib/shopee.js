@@ -1,8 +1,11 @@
-import {createHmac,createHash,randomBytes,createCipheriv} from 'node:crypto';
+import {createHmac,createHash,randomBytes,createCipheriv,createDecipheriv} from 'node:crypto';
 export const hash=s=>createHash('sha256').update(s).digest('hex');
 export const nonce=()=>randomBytes(32).toString('hex');
-export const apiBase=()=>process.env.SHOPEE_ENV==='live'?'https://partner.shopeemobile.com':'https://openplatform.sandbox.test-stable.shopee.sg';
+export const apiBase=()=>process.env.SHOPEE_ENV==='live'?'https://partner.shopeemobile.com':'https://open.sandbox.test-stable.shopee.com';
 export const sign=(id,path,ts,key)=>createHmac('sha256',key).update(String(id)+path+String(ts)).digest('hex');
 export function config(){const id=process.env.SHOPEE_PARTNER_ID,key=process.env.SHOPEE_PARTNER_KEY,redirect=process.env.SHOPEE_REDIRECT_URL;if(!id||!key||!redirect)throw Error('shopee_config_missing');const u=new URL(redirect);if(u.protocol!=='https:'||u.hostname!=='escritoriofixar.vercel.app'||u.pathname!=='/api/shopee/callback')throw Error('shopee_redirect_invalid');return {id,key,redirect};}
 export async function db(path,{method='GET',body,prefer}={}){const url=process.env.SUPABASE_URL;const key=process.env.SUPABASE_SECRET_KEY;if(!url||!key)throw Error('supabase_missing');const r=await fetch(url+'/rest/v1/'+path,{method,headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json',...(prefer?{Prefer:prefer}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(9000)});if(!r.ok)throw Error('database_error_'+r.status);if(r.status===204)return null;const t=await r.text();return t?JSON.parse(t):null;}
 export function encrypt(value){const k=process.env.SHOPEE_TOKEN_ENCRYPTION_KEY;if(!k||!/^[0-9a-fA-F]{64}$/.test(k))throw Error('encryption_key_missing');const iv=randomBytes(12);const cipher=createCipheriv('aes-256-gcm',Buffer.from(k,'hex'),iv);const ciphertext=Buffer.concat([cipher.update(value,'utf8'),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),ciphertext]).toString('hex');}
+
+export function decrypt(hex){const k=process.env.SHOPEE_TOKEN_ENCRYPTION_KEY;if(!k||!/^[0-9a-fA-F]{64}$/.test(k))throw Error('encryption_key_missing');const b=Buffer.from(hex.replace(/^\\x/,''),'hex');const d=createDecipheriv('aes-256-gcm',Buffer.from(k,'hex'),b.subarray(0,12));d.setAuthTag(b.subarray(12,28));return Buffer.concat([d.update(b.subarray(28)),d.final()]).toString('utf8');}
+export function shopSign(id,path,ts,token,shopId,key){return createHmac('sha256',key).update(String(id)+path+String(ts)+token+String(shopId)).digest('hex');}
