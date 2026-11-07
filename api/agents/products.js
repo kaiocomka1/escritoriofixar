@@ -124,11 +124,23 @@ async function autoOptimizeSandbox(req,res){
    const itemId=Number(p.item_id);
    if(!oldTitle||!Number.isSafeInteger(itemId)){report.push({itemId,status:'skipped',reason:'Produto inválido'});continue;}
    const description=String(p.description||'').trim();
-   const meaningful=description.length>=40&&/\\b(pe|pé|kit|suporte|nivelador|cantoneira|trava|parafuso|madeira|plastico|plástico)\\b/i.test(description+' '+oldTitle);
-   if(!meaningful){report.push({itemId,oldTitle,status:'skipped',reason:'Cadastro de teste sem detalhes suficientes para otimização segura'});continue;}
-   const prompt='Crie um título de anúncio Shopee em português brasileiro com 35 a 100 caracteres. Preserve o tipo de produto, quantidades, medidas, material e diferenciais que estejam explicitamente no cadastro. Se não houver informações suficientes para melhorar, responda IGUAL. Não invente marca, material, medida, capacidade ou acessórios. Não use emojis, alegações de liderança ou promoções. Responda SOMENTE com o título, sem aspas.\nNome atual: '+oldTitle.slice(0,180)+'\nDescrição: '+String(p.description||'').slice(0,1200);
+   const imageUrl=p.image?.image_url_list?.[0]||null;
+   const prompt='Analise a imagem do produto e o cadastro. Gere um título SEO Shopee Brasil de 35 a 100 caracteres, identificando corretamente o objeto e sua finalidade. Use termos de busca relacionados. Não invente medidas, material, quantidade, capacidade, marca ou características invisíveis. Se não for possível identificar, responda IGUAL. Responda somente com o título.\\nTítulo: '+oldTitle.slice(0,180)+'\\nDescrição: '+description.slice(0,1200);
    try{
-    const ai=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':apiKey},body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0.25,maxOutputTokens:180}}),signal:AbortSignal.timeout(18000)});
+    const parts=[{text:prompt}];
+    if(imageUrl){
+     const u=new URL(imageUrl),host=u.hostname.toLowerCase();
+     if(u.protocol==='https:'&&(host.endsWith('.susercontent.com')||host.endsWith('.shopee.com.br')||host.endsWith('.shopee.sg'))){
+      const ir=await fetch(u,{redirect:'error',signal:AbortSignal.timeout(9000)});
+      const mime=(ir.headers.get('content-type')||'').split(';')[0];
+      if(ir.ok&&['image/jpeg','image/png','image/webp'].includes(mime)){
+       const bytes=await ir.arrayBuffer();
+       if(bytes.byteLength>0&&bytes.byteLength<=3500000)parts.push({inlineData:{mimeType:mime,data:Buffer.from(bytes).toString('base64')}});
+      }
+     }
+    }
+    if(parts.length===1&&description.length<40){report.push({itemId,oldTitle,status:'skipped',reason:'Sem imagem acessível nem descrição suficiente'});continue;}
+    const ai=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':apiKey},body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0.25,maxOutputTokens:180}}),signal:AbortSignal.timeout(18000)});
     const aiData=await ai.json().catch(()=>({}));
     if(!ai.ok)throw Error('Gemini HTTP '+ai.status+' '+String(aiData.error?.message||'').slice(0,120));
     const title=(aiData.candidates?.[0]?.content?.parts||[]).map(x=>x.text||'').join('').trim().replace(/^[“”"]+|[“”"]+$/g,'').replace(/\s+/g,' ');
