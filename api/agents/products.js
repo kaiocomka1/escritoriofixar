@@ -11,7 +11,7 @@ export default async function handler(req,res){
  const prior=history.slice(-8).filter(x=>['user','model'].includes(x.role)&&typeof x.text==='string').map(x=>({role:x.role,parts:[{text:x.text.slice(0,4000)}]}));
  const contents=[...prior,{role:'user',parts:[{text:message.trim()}]}];
  try{
-  const configuredModel=process.env.GEMINI_MODEL||'gemini-2.5-flash-lite';
+  const configuredModel=process.env.GEMINI_MODEL||'gemini-3.5-flash-lite';
   const requestedModel=configuredModel.startsWith('models/')?configuredModel.slice(7):configuredModel;
   const payload=JSON.stringify({systemInstruction:{parts:[{text:SYSTEM}]},contents,generationConfig:{maxOutputTokens:900,temperature:0.5}});
   async function generate(model,version='v1beta'){
