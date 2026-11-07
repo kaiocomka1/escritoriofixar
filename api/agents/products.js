@@ -17,7 +17,7 @@ export default async function handler(req,res){
  const mentionsCatalog=/(shopee|anunci|titulo|produto|catalog|seo|listagem)/.test(command);
  const requestsImprovement=/(otimiz|melhor|aprimor|reescrev|ajust|revis|analis|avali|audit|suger|sugir|sugest|corrig|oportunidade)/.test(command);
  const asksOptimize=mentionsCatalog&&requestsImprovement;
- const asksHistory=/(historico|alterac|mudanc|o que mudou)/.test(command);
+ const asksHistory=/(historico|registro|desfazer|reverter|o que mudou|ultimas alteracoes|alteracoes anteriores|mudancas anteriores)/.test(command)&&!requestsImprovement;
  const asksPreview=/(simul|suger|sugir|sugest|propost|sem publicar|sem alterar|nao publi|nao alter|antes de publicar|analise primeiro|avali|audit|analis|oportunidade)/.test(command)&&!/(pode publicar|publique|publicar agora|aplique|execute|otimize agora)/.test(command);
  if(process.env.SHOPEE_ENV==='sandbox'&&asksOptimize){
   const result=await invokeAgentAction(autoOptimizeSandbox,req,{...req.body,action:'auto_optimize_sandbox',preview:asksPreview});
