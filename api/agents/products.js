@@ -23,8 +23,16 @@ export default async function handler(req,res){
   const result=await invokeAgentAction(autoOptimizeSandbox,req,{...req.body,action:'auto_optimize_sandbox',preview:asksPreview});
   if(result.status!==200)return res.status(result.status).json(result.data);
   const rows=result.data.results||[];
-  const summary=rows.map(x=>'Produto '+x.itemId+': '+x.status+(x.oldTitle?'\nAntes: '+x.oldTitle:'')+(x.newTitle?'\nDepois: '+x.newTitle:'')+(x.reason?'\nObservação: '+x.reason:'')).join('\n\n');
-  return res.status(200).json({answer:(asksPreview?'Simulação concluída, sem alterações.':'Otimização executada na Shopee Sandbox.')+'\n\n'+(summary||'Nenhum produto encontrado.'),operation:'optimize',report:result.data});
+  const summary=rows.map(x=>{
+   const oldTitle=String(x.oldTitle||'').trim(),newTitle=String(x.newTitle||'').trim();
+   if(x.status==='preview'||x.status==='verified'){
+    const previous=new Set(oldTitle.toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').split(/[^a-z0-9]+/).filter(Boolean));
+    const added=[...new Set(newTitle.split(/\\s+/).filter(word=>!previous.has(word.toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\\u0300-\\u036f]/g,''))))];
+    return 'Anúncio #'+x.itemId+'\nTítulo atual: '+oldTitle+'\nTítulo sugerido: '+newTitle+'\nO que mudou: '+(added.length?'foram incluídos termos como '+added.slice(0,8).join(', ')+'.':'a ordem e a organização dos termos foram ajustadas.')+'\nAvaliação: a proposta amplia a variedade de termos descritivos, mas não há dados de buscas ou conversões para afirmar que terá desempenho superior.'+(x.status==='preview'?'\nPublicação: nenhuma alteração realizada.':'\nPublicação: alteração confirmada pela Shopee Sandbox.');
+   }
+   return 'Anúncio #'+x.itemId+' · '+x.status+(x.reason?'\nDetalhe: '+x.reason:'');
+  }).join('\n\n');
+  return res.status(200).json({answer:(asksPreview?'Analisei os anúncios disponíveis na Shopee Sandbox e preparei estas sugestões:':'Confira o resultado da otimização na Shopee Sandbox:')+'\n\n'+(summary||'Nenhum produto encontrado.'),operation:'optimize',report:result.data});
  }
  if(process.env.SHOPEE_ENV==='sandbox'&&asksHistory){
   const result=await invokeAgentAction(productChangeHistory,req,{...req.body,action:'product_change_history'});
