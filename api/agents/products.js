@@ -128,7 +128,7 @@ async function autoOptimizeSandbox(req,res){
     const ai=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':apiKey},body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0.25,maxOutputTokens:180}}),signal:AbortSignal.timeout(18000)});
     const aiData=await ai.json().catch(()=>({}));
     if(!ai.ok)throw Error('Gemini HTTP '+ai.status+' '+String(aiData.error?.message||'').slice(0,120));
-    const title=(aiData.candidates?.[0]?.content?.parts||[]).map(x=>x.text||'').join('').trim().replace(/^["'“”]+|["'“”]+$/g,'').replace(/\s+/g,' ');
+    const title=(aiData.candidates?.[0]?.content?.parts||[]).map(x=>x.text||'').join('').trim().replace(/^[“”"]+|[“”"]+$/g,'').replace(/\s+/g,' ');
     if(title.length<20||title.length>100||/[\n\r]/.test(title))throw Error('Título gerado fora dos limites');
     if(title.toLocaleLowerCase('pt-BR')===oldTitle.toLocaleLowerCase('pt-BR')){report.push({itemId,oldTitle,newTitle:title,status:'unchanged'});continue;}
     await call('/api/v2/product/update_item','POST',{}, {item_id:itemId,item_name:title});
