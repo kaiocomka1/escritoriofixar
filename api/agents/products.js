@@ -15,7 +15,7 @@ export default async function handler(req,res){
   const url='https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent';
   const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify({systemInstruction:{parts:[{text:SYSTEM}]},contents,generationConfig:{maxOutputTokens:900,temperature:0.5}}),signal:AbortSignal.timeout(25000)});
   const data=await response.json().catch(()=>({}));
-  if(!response.ok)return res.status(response.status===429?429:502).json({error:response.status===429?'gemini_quota_exceeded':'gemini_provider_error',providerStatus:response.status});
+  if(!response.ok)return res.status(response.status===429?429:502).json({error:response.status===429?'gemini_quota_exceeded':'gemini_provider_error',providerStatus:response.status,providerCode:typeof data.error?.status==='string'?data.error.status.slice(0,60):null,model});
   const answer=(data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('').trim();
   if(!answer)return res.status(502).json({error:'empty_gemini_response'});
   return res.status(200).json({answer,model});
