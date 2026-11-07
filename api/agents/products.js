@@ -6,6 +6,7 @@ export default async function handler(req,res){
  if(req.method!=='POST')return res.status(405).json({error:'method_not_allowed'});
  if(!await requireAdmin(req,res))return;
  if(req.body?.action==='edit_sandbox_title')return editSandboxProduct(req,res);
+ if(req.body?.action==='auto_optimize_sandbox')return autoOptimizeSandbox(req,res);
  const key=process.env.GEMINI_API_KEY;
  if(!key)return res.status(503).json({error:'gemini_key_not_configured'});
  const {message,history=[]}=req.body||{};
@@ -90,4 +91,52 @@ async function editSandboxProduct(req,res){
   if(updated.error)return res.status(502).json({error:'shopee_update_failed',providerError:updated.error,providerMessage:updated.message});
   return res.status(200).json({success:true,itemId:Number(itemId),title:title.trim(),providerResponse:updated.response});
  }catch{return res.status(503).json({error:'shopee_update_unavailable'});}
+}
+
+async function autoOptimizeSandbox(req,res){
+ if(process.env.SHOPEE_ENV!=='sandbox')return res.status(403).json({error:'sandbox_only'});
+ const apiKey=process.env.GEMINI_API_KEY;
+ if(!apiKey)return res.status(503).json({error:'gemini_key_not_configured'});
+ const maxItems=3;
+ const report=[];
+ try{
+  const stores=await db('marketplace_stores?provider=eq.shopee&status=eq.connected&select=id,external_shop_id&order=created_at.desc&limit=1');
+  if(!stores?.length)return res.status(409).json({error:'store_not_connected'});
+  const shop=stores[0],auth=await accessTokenForStore(shop);
+  if(auth.error)return res.status(409).json({error:auth.error});
+  const {id,key}=config(),shopId=Number(shop.external_shop_id);
+  async function call(path,method,params={},body){
+   const ts=Math.floor(Date.now()/1000),url=new URL(apiBase()+path);
+   for(const [k,v] of Object.entries({partner_id:id,timestamp:ts,access_token:auth.token,shop_id:shopId,sign:shopSign(id,path,ts,auth.token,shopId,key),...params}))url.searchParams.set(k,String(v));
+   const response=await fetch(url,{method,headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(12000)});
+   const data=await response.json().catch(()=>({}));
+   if(!response.ok||data.error)throw Error('Shopee: '+String(data.error||response.status)+' '+String(data.message||'').slice(0,130));
+   return data.response||{};
+  }
+  const listing=await call('/api/v2/product/get_item_list','GET',{offset:0,page_size:maxItems,item_status:'NORMAL'});
+  const items=(listing.item||[]).slice(0,maxItems);
+  if(!items.length)return res.status(200).json({results:[],message:'Nenhum produto ativo na Sandbox'});
+  const detail=await call('/api/v2/product/get_item_base_info','GET',{item_id_list:items.map(x=>x.item_id).join(',')});
+  const products=(detail.item_list||[]).filter(p=>items.some(x=>String(x.item_id)===String(p.item_id))).slice(0,maxItems);
+  const model=(process.env.GEMINI_MODEL||'gemini-3.5-flash-lite').replace(/^models\//,'');
+  for(const p of products){
+   const oldTitle=String(p.item_name||'').trim();
+   const itemId=Number(p.item_id);
+   if(!oldTitle||!Number.isSafeInteger(itemId)){report.push({itemId,status:'skipped',reason:'Produto inválido'});continue;}
+   const prompt='Crie um título de anúncio Shopee em português brasileiro com 20 a 100 caracteres. Preserve somente fatos demonstrados. Não invente marca, material, medida, capacidade ou acessórios. Não use emojis, alegações de liderança ou promoções. Responda SOMENTE com o título, sem aspas.\nNome atual: '+oldTitle.slice(0,180)+'\nDescrição: '+String(p.description||'').slice(0,1200);
+   try{
+    const ai=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':apiKey},body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0.25,maxOutputTokens:180}}),signal:AbortSignal.timeout(18000)});
+    const aiData=await ai.json().catch(()=>({}));
+    if(!ai.ok)throw Error('Gemini HTTP '+ai.status+' '+String(aiData.error?.message||'').slice(0,120));
+    const title=(aiData.candidates?.[0]?.content?.parts||[]).map(x=>x.text||'').join('').trim().replace(/^["'“”]+|["'“”]+$/g,'').replace(/\s+/g,' ');
+    if(title.length<20||title.length>100||/[\n\r]/.test(title))throw Error('Título gerado fora dos limites');
+    if(title.toLocaleLowerCase('pt-BR')===oldTitle.toLocaleLowerCase('pt-BR')){report.push({itemId,oldTitle,newTitle:title,status:'unchanged'});continue;}
+    await call('/api/v2/product/update_item','POST',{}, {item_id:itemId,item_name:title});
+    const verify=await call('/api/v2/product/get_item_base_info','GET',{item_id_list:String(itemId)});
+    const saved=String((verify.item_list||[])[0]?.item_name||'').trim();
+    report.push({itemId,oldTitle,newTitle:title,status:saved===title?'verified':'submitted_unverified',savedTitle:saved||null});
+   }catch(e){report.push({itemId,oldTitle,status:'failed',reason:String(e.message||e).slice(0,200)});}
+  }
+  return res.status(200).json({results:report,shopId,model,limit:maxItems});
+ }catch(e){return res.status(503).json({error:'sandbox_auto_optimize_failed',detail:String(e.message||e).slice(0,200),results:report});}
 }
