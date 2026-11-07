@@ -13,6 +13,23 @@ export default async function handler(req,res){
  if(!key)return res.status(503).json({error:'gemini_key_not_configured'});
  const {message,history=[]}=req.body||{};
  if(typeof message!=='string'||!message.trim()||message.length>4000||!Array.isArray(history))return res.status(400).json({error:'invalid_message'});
+ const command=message.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');
+ const asksOptimize=/\\b(otimiz|melhor|aprimor|reescrev|ajust|revis)\\w*/.test(command)&&/\\b(anunci|titulo|produto|catalogo|seo)\\w*/.test(command);
+ const asksHistory=/\\b(historico|alteracoes|mudancas|o que mudou)\\b/.test(command);
+ const asksPreview=/\\b(simul|suger|propost|sem publicar|sem alterar|antes de publicar|analise primeiro)\\w*/.test(command);
+ if(process.env.SHOPEE_ENV==='sandbox'&&asksOptimize){
+  const result=await invokeAgentAction(autoOptimizeSandbox,req,{...req.body,action:'auto_optimize_sandbox',preview:asksPreview});
+  if(result.status!==200)return res.status(result.status).json(result.data);
+  const rows=result.data.results||[];
+  const summary=rows.map(x=>'Produto '+x.itemId+': '+x.status+(x.oldTitle?'\\nAntes: '+x.oldTitle:'')+(x.newTitle?'\\nDepois: '+x.newTitle:'')+(x.reason?'\\nObservação: '+x.reason:'')).join('\\n\\n');
+  return res.status(200).json({answer:(asksPreview?'Simulação concluída, sem alterações.':'Otimização executada na Shopee Sandbox.')+'\\n\\n'+(summary||'Nenhum produto encontrado.'),operation:'optimize',report:result.data});
+ }
+ if(process.env.SHOPEE_ENV==='sandbox'&&asksHistory){
+  const result=await invokeAgentAction(productChangeHistory,req,{...req.body,action:'product_change_history'});
+  if(result.status!==200)return res.status(result.status).json(result.data);
+  const rows=result.data.changes||[];
+  return res.status(200).json({answer:rows.length?'Últimas alterações:\\n'+rows.slice(0,10).map(x=>'#'+x.item_id+' · '+x.status+' · '+x.new_title).join('\\n'):'Ainda não há alterações registradas.',operation:'history'});
+ }
  const {includeShopee=false}=req.body||{};
  let shopeeContext='';
  let shopeeInfo=null;
@@ -239,4 +256,11 @@ async function undoProductChange(req,res){
   await db('product_agent_changes?id=eq.'+changeId+'&store_id=eq.'+shop.id,{method:'PATCH',prefer:'return=minimal',body:{status:'reverted',reverted_at:new Date().toISOString()}});
   return res.status(200).json({success:true,itemId:change.item_id,restoredTitle:change.previous_title});
  }catch(e){return res.status(503).json({error:'undo_failed',detail:String(e.message||e).slice(0,180)});}
+}
+
+async function invokeAgentAction(fn,req,body){
+ let status=200,data={};
+ const mock={setHeader(){},status(code){status=code;return this;},json(value){data=value;return this;}};
+ await fn({...req,body},mock);
+ return {status,data};
 }
