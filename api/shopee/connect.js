@@ -8,7 +8,7 @@ export default async function handler(req,res){
  try{
   const {id,redirect}=config();const state=nonce();
   await db('shopee_oauth_states',{method:'POST',body:{state_hash:hash(state),admin_user_id:user.id,expires_at:new Date(Date.now()+10*60*1000).toISOString()}});
-  const u=new URL('https://open.test-stable.shopee.com.br/auth');
+  const u=new URL('https://open.sandbox.test-stable.shopee.com/auth');
   u.searchParams.set('partner_id',id);
   u.searchParams.set('auth_type','seller');
   u.searchParams.set('redirect_uri',redirect);
