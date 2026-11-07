@@ -160,6 +160,9 @@ async function autoOptimizeSandbox(req,res){
     const title=(aiData.candidates?.[0]?.content?.parts||[]).map(x=>x.text||'').join('').trim().replace(/^[“”"]+|[“”"]+$/g,'').replace(/\s+/g,' ');
     if(title==='IGUAL'){report.push({itemId,oldTitle,status:'unchanged',reason:'Gemini não encontrou melhorias fundamentadas'});continue;}
     if(title.length<35||title.length>120||/[\n\r]/.test(title))throw Error('Título gerado sem detalhes suficientes ou fora dos limites');
+    const criticalTokens=(oldTitle.match(/\\b\\d+(?:[.,]\\d+)?\\s*(?:cm|mm|kg|ml|l|unidades|peças|pcs)\\b/gi)||[]).map(v=>v.toLowerCase().replace(/\\s+/g,''));
+    const normalizedNew=title.toLowerCase().replace(/\\s+/g,'');
+    if(criticalTokens.some(token=>!normalizedNew.includes(token))){report.push({itemId,oldTitle,newTitle:title,status:'skipped',reason:'Título proposto omitiu medida ou quantidade presente no cadastro'});continue;}
     if(title.toLocaleLowerCase('pt-BR')===oldTitle.toLocaleLowerCase('pt-BR')){report.push({itemId,oldTitle,newTitle:title,status:'unchanged'});continue;}
     await call('/api/v2/product/update_item','POST',{}, {item_id:itemId,item_name:title});
     let saved='';
