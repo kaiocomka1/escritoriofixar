@@ -125,7 +125,19 @@ async function autoOptimizeSandbox(req,res){
    if(!oldTitle||!Number.isSafeInteger(itemId)){report.push({itemId,status:'skipped',reason:'Produto inválido'});continue;}
    const description=String(p.description||'').trim();
    const imageUrl=p.image?.image_url_list?.[0]||null;
-   const prompt='Analise a imagem do produto e o cadastro. Gere um título SEO Shopee Brasil de 35 a 100 caracteres, identificando corretamente o objeto e sua finalidade. Use termos de busca relacionados. Não invente medidas, material, quantidade, capacidade, marca ou características invisíveis. Se não for possível identificar, responda IGUAL. Responda somente com o título.\\nTítulo: '+oldTitle.slice(0,180)+'\\nDescrição: '+description.slice(0,1200);
+   const prompt=[
+    'Você é especialista em SEO de títulos da Shopee Brasil, focado em cobertura de termos de pesquisa relevantes, não em frases publicitárias.',
+    'Analise primeiro a imagem de capa e identifique com precisão o objeto real, função e contexto de uso. Cruze com título e descrição, que podem estar ruins ou errados.',
+    'Gere um título com 105 a 120 caracteres, preferencialmente 115 a 120, SEM ultrapassar 120. Use sequências naturais de palavras-chave, sem exigir frase completa.',
+    'Ordene: produto principal, sinônimos comerciais comprováveis, aplicação, instalação/local de uso e termos complementares pertinentes.',
+    'Evite conectivos repetidos, enchimento, termos irrelevantes, repetições desnecessárias e palavras sem relação com o produto.',
+    'Não invente dimensões, capacidade, quantidade, material, compatibilidade, acessórios ou método de fixação que não sejam evidentes.',
+    'Exemplo ilustrativo de estilo, não copie para outros produtos: Suporte para Saco de Lixo Cozinha Lixeira Suspensa Porta Armário Organizador de Sacola Cesto de Lixo Doméstico.',
+    'Se não houver termos relevantes suficientes para 105 caracteres, prefira título menor e correto. Se não conseguir identificar o produto, responda IGUAL.',
+    'Responda APENAS com o título, sem aspas, listas ou explicações.',
+    'Título atual: '+oldTitle.slice(0,180),
+    'Descrição: '+description.slice(0,1200)
+   ].join('\\n');
    try{
     const parts=[{text:prompt}];
     if(imageUrl){
@@ -140,12 +152,12 @@ async function autoOptimizeSandbox(req,res){
      }
     }
     if(parts.length===1&&description.length<40){report.push({itemId,oldTitle,status:'skipped',reason:'Sem imagem acessível nem descrição suficiente'});continue;}
-    const ai=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':apiKey},body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0.25,maxOutputTokens:180}}),signal:AbortSignal.timeout(18000)});
+    const ai=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':apiKey},body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0.25,maxOutputTokens:240}}),signal:AbortSignal.timeout(18000)});
     const aiData=await ai.json().catch(()=>({}));
     if(!ai.ok)throw Error('Gemini HTTP '+ai.status+' '+String(aiData.error?.message||'').slice(0,120));
     const title=(aiData.candidates?.[0]?.content?.parts||[]).map(x=>x.text||'').join('').trim().replace(/^[“”"]+|[“”"]+$/g,'').replace(/\s+/g,' ');
     if(title==='IGUAL'){report.push({itemId,oldTitle,status:'unchanged',reason:'Gemini não encontrou melhorias fundamentadas'});continue;}
-    if(title.length<35||title.length>100||/[\n\r]/.test(title))throw Error('Título gerado sem detalhes suficientes ou fora dos limites');
+    if(title.length<35||title.length>120||/[\n\r]/.test(title))throw Error('Título gerado sem detalhes suficientes ou fora dos limites');
     if(title.toLocaleLowerCase('pt-BR')===oldTitle.toLocaleLowerCase('pt-BR')){report.push({itemId,oldTitle,newTitle:title,status:'unchanged'});continue;}
     await call('/api/v2/product/update_item','POST',{}, {item_id:itemId,item_name:title});
     let saved='';
