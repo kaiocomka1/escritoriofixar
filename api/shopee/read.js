@@ -1,5 +1,5 @@
 import {requireAdmin} from '../_lib/admin.js';
-import {apiBase,config,db,decrypt,shopSign} from '../_lib/shopee.js';
+import {apiBase,config,db,accessTokenForStore,shopSign} from '../_lib/shopee.js';
 export default async function handler(req,res){
  res.setHeader('Cache-Control','no-store');
  if(req.method!=='GET')return res.status(405).json({error:'method_not_allowed'});
@@ -13,13 +13,10 @@ export default async function handler(req,res){
   const stores=await db('marketplace_stores?provider=eq.shopee&status=eq.connected&select=id,external_shop_id&order=created_at.desc&limit=1');
   if(!stores?.length)return res.status(409).json({error:'store_not_connected'});
   const shop=stores[0];
-  stage='load_credentials';
-  const credentials=await db('integration_credentials?store_id=eq.'+shop.id+'&select=encrypted_access_token,token_expires_at&limit=1');
-  if(!credentials?.length)return res.status(409).json({error:'token_missing'});
-  const credential=credentials[0];
-  if(Date.parse(credential.token_expires_at)<=Date.now()+60000)return res.status(409).json({error:'access_token_expired',message:'Renovação automática ainda não implementada.'});
-  stage='decrypt_token';
-  const accessToken=decrypt(credential.encrypted_access_token);
+  stage='load_or_refresh_token';
+  const auth=await accessTokenForStore(shop);
+  if(auth.error)return res.status(409).json({error:auth.error,...(auth.providerError?{providerError:auth.providerError}:{})});
+  const accessToken=auth.token;
   const {id,key}=config(),path=paths[kind],ts=Math.floor(Date.now()/1000),shopId=Number(shop.external_shop_id);
   const url=new URL(apiBase()+path);
   url.searchParams.set('partner_id',id);
