@@ -11,7 +11,8 @@ export default async function handler(req,res){
  const prior=history.slice(-8).filter(x=>['user','model'].includes(x.role)&&typeof x.text==='string').map(x=>({role:x.role,parts:[{text:x.text.slice(0,4000)}]}));
  const contents=[...prior,{role:'user',parts:[{text:message.trim()}]}];
  try{
-  const requestedModel=(process.env.GEMINI_MODEL||'gemini-2.5-flash-lite').replace(/^models\\//,'');
+  const configuredModel=process.env.GEMINI_MODEL||'gemini-2.5-flash-lite';
+  const requestedModel=configuredModel.startsWith('models/')?configuredModel.slice(7):configuredModel;
   const payload=JSON.stringify({systemInstruction:{parts:[{text:SYSTEM}]},contents,generationConfig:{maxOutputTokens:900,temperature:0.5}});
   async function generate(model){
    const url='https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent';
@@ -23,9 +24,9 @@ export default async function handler(req,res){
    const listing=await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=100',{headers:{'x-goog-api-key':key},signal:AbortSignal.timeout(12000)});
    if(listing.ok){
     const available=await listing.json();
-    const choices=(available.models||[]).filter(m=>m.supportedGenerationMethods?.includes('generateContent')).map(m=>m.name?.replace(/^models\\//,'')).filter(Boolean);
+    const choices=(available.models||[]).filter(m=>m.supportedGenerationMethods?.includes('generateContent')).map(m=>m.name?.startsWith('models/')?m.name.slice(7):m.name).filter(Boolean);
     const preferred=['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-2.0-flash-lite','gemini-2.0-flash','gemini-1.5-flash'];
-    const fallback=preferred.find(m=>m!==requestedModel&&choices.includes(m))||choices.filter(m=>m!==requestedModel&&/^gemini-[\\w.-]*flash(?:-lite)?(?:-[\\w.-]+)?$/.test(m)&&!m.includes('preview')&&!m.includes('exp')).sort((a,b)=>a.localeCompare(b)).at(-1);
+    const fallback=preferred.find(m=>m!==requestedModel&&choices.includes(m))||choices.filter(m=>m!==requestedModel&&m.startsWith('gemini-')&&m.includes('flash')&&!m.includes('preview')&&!m.includes('exp')).sort((a,b)=>a.localeCompare(b)).at(-1);
     if(fallback)result=await generate(fallback);
    }
   }
