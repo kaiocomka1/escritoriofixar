@@ -123,18 +123,27 @@ async function autoOptimizeSandbox(req,res){
    const oldTitle=String(p.item_name||'').trim();
    const itemId=Number(p.item_id);
    if(!oldTitle||!Number.isSafeInteger(itemId)){report.push({itemId,status:'skipped',reason:'Produto inválido'});continue;}
-   const prompt='Crie um título de anúncio Shopee em português brasileiro com 20 a 100 caracteres. Preserve somente fatos demonstrados. Não invente marca, material, medida, capacidade ou acessórios. Não use emojis, alegações de liderança ou promoções. Responda SOMENTE com o título, sem aspas.\nNome atual: '+oldTitle.slice(0,180)+'\nDescrição: '+String(p.description||'').slice(0,1200);
+   const description=String(p.description||'').trim();
+   const meaningful=description.length>=40&&/\\b(pe|pé|kit|suporte|nivelador|cantoneira|trava|parafuso|madeira|plastico|plástico)\\b/i.test(description+' '+oldTitle);
+   if(!meaningful){report.push({itemId,oldTitle,status:'skipped',reason:'Cadastro de teste sem detalhes suficientes para otimização segura'});continue;}
+   const prompt='Crie um título de anúncio Shopee em português brasileiro com 35 a 100 caracteres. Preserve o tipo de produto, quantidades, medidas, material e diferenciais que estejam explicitamente no cadastro. Se não houver informações suficientes para melhorar, responda IGUAL. Não invente marca, material, medida, capacidade ou acessórios. Não use emojis, alegações de liderança ou promoções. Responda SOMENTE com o título, sem aspas.\nNome atual: '+oldTitle.slice(0,180)+'\nDescrição: '+String(p.description||'').slice(0,1200);
    try{
     const ai=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':apiKey},body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0.25,maxOutputTokens:180}}),signal:AbortSignal.timeout(18000)});
     const aiData=await ai.json().catch(()=>({}));
     if(!ai.ok)throw Error('Gemini HTTP '+ai.status+' '+String(aiData.error?.message||'').slice(0,120));
     const title=(aiData.candidates?.[0]?.content?.parts||[]).map(x=>x.text||'').join('').trim().replace(/^[“”"]+|[“”"]+$/g,'').replace(/\s+/g,' ');
-    if(title.length<20||title.length>100||/[\n\r]/.test(title))throw Error('Título gerado fora dos limites');
+    if(title==='IGUAL'){report.push({itemId,oldTitle,status:'unchanged',reason:'Gemini não encontrou melhorias fundamentadas'});continue;}
+    if(title.length<35||title.length>100||/[\n\r]/.test(title))throw Error('Título gerado sem detalhes suficientes ou fora dos limites');
     if(title.toLocaleLowerCase('pt-BR')===oldTitle.toLocaleLowerCase('pt-BR')){report.push({itemId,oldTitle,newTitle:title,status:'unchanged'});continue;}
     await call('/api/v2/product/update_item','POST',{}, {item_id:itemId,item_name:title});
-    const verify=await call('/api/v2/product/get_item_base_info','GET',{item_id_list:String(itemId)});
-    const saved=String((verify.item_list||[])[0]?.item_name||'').trim();
-    report.push({itemId,oldTitle,newTitle:title,status:saved===title?'verified':'submitted_unverified',savedTitle:saved||null});
+    let saved='';
+    for(let attempt=0;attempt<3;attempt++){
+     await new Promise(resolve=>setTimeout(resolve,attempt===0?1000:1800));
+     const verify=await call('/api/v2/product/get_item_base_info','GET',{item_id_list:String(itemId)});
+     saved=String((verify.item_list||[])[0]?.item_name||'').trim();
+     if(saved===title)break;
+    }
+    report.push({itemId,oldTitle,newTitle:title,status:saved===title?'verified':'submitted_unverified',savedTitle:saved||null,reason:saved===title?null:'A API não confirmou o novo título após três consultas'});
    }catch(e){report.push({itemId,oldTitle,status:'failed',reason:String(e.message||e).slice(0,200)});}
   }
   return res.status(200).json({results:report,shopId,model,limit:maxItems});
