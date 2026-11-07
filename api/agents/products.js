@@ -100,6 +100,7 @@ async function autoOptimizeSandbox(req,res){
  const apiKey=process.env.GEMINI_API_KEY;
  if(!apiKey)return res.status(503).json({error:'gemini_key_not_configured'});
  const maxItems=3;
+ const preview=req.body?.preview===true;
  const report=[];
  try{
   const stores=await db('marketplace_stores?provider=eq.shopee&status=eq.connected&select=id,external_shop_id&order=created_at.desc&limit=1');
@@ -129,7 +130,7 @@ async function autoOptimizeSandbox(req,res){
    const oldTitle=String(p.item_name||'').trim();
    const itemId=Number(p.item_id);
    if(!oldTitle||!Number.isSafeInteger(itemId)){report.push({itemId,status:'skipped',reason:'Produto inválido'});continue;}
-   if(recentChanges.some(x=>String(x.item_id)===String(itemId)&&Date.now()-Date.parse(x.created_at)<cooldown)){report.push({itemId,oldTitle,status:'skipped',reason:'Proteção: anúncio já processado nas últimas 24 horas'});continue;}
+   if(!preview&&recentChanges.some(x=>String(x.item_id)===String(itemId)&&Date.now()-Date.parse(x.created_at)<cooldown)){report.push({itemId,oldTitle,status:'skipped',reason:'Proteção: anúncio já processado nas últimas 24 horas'});continue;}
    const description=String(p.description||'').trim();
    const imageUrl=p.image?.image_url_list?.[0]||null;
    const prompt=[
@@ -169,6 +170,7 @@ async function autoOptimizeSandbox(req,res){
     const normalizedNew=title.toLowerCase().replace(/\\s+/g,'');
     if(criticalTokens.some(token=>!normalizedNew.includes(token))){report.push({itemId,oldTitle,newTitle:title,status:'skipped',reason:'Título proposto omitiu medida ou quantidade presente no cadastro'});continue;}
     if(title.toLocaleLowerCase('pt-BR')===oldTitle.toLocaleLowerCase('pt-BR')){report.push({itemId,oldTitle,newTitle:title,status:'unchanged'});continue;}
+    if(preview){report.push({itemId,oldTitle,newTitle:title,status:'preview',reason:'Simulação: nenhuma alteração enviada à Shopee'});continue;}
     const auditRows=await db('product_agent_changes?select=id',{method:'POST',prefer:'return=representation',body:{store_id:shop.id,item_id:itemId,previous_title:oldTitle,new_title:title,status:'failed'}});
     const auditId=auditRows?.[0]?.id;
     if(!auditId)throw Error('Não foi possível registrar alteração no histórico');
@@ -185,7 +187,7 @@ async function autoOptimizeSandbox(req,res){
     report.push({itemId,oldTitle,newTitle:title,status,savedTitle:saved||null,auditId,reason:saved===title?null:'A API não confirmou o novo título após três consultas'});
    }catch(e){report.push({itemId,oldTitle,status:'failed',reason:String(e.message||e).slice(0,200)});}
   }
-  return res.status(200).json({results:report,shopId,model,limit:maxItems});
+  return res.status(200).json({results:report,shopId,model,limit:maxItems,preview});
  }catch(e){return res.status(503).json({error:'sandbox_auto_optimize_failed',detail:String(e.message||e).slice(0,200),results:report});}
 }
 
