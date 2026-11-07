@@ -1,7 +1,7 @@
 import {createHmac,createHash,randomBytes,createCipheriv,createDecipheriv} from 'node:crypto';
 export const hash=s=>createHash('sha256').update(s).digest('hex');
 export const nonce=()=>randomBytes(32).toString('hex');
-export const apiBase=()=>process.env.SHOPEE_ENV==='live'?'https://partner.shopeemobile.com':'https://open.sandbox.test-stable.shopee.com';
+export const apiBase=()=>process.env.SHOPEE_ENV==='live'?'https://partner.shopeemobile.com':'https://openplatform.sandbox.test-stable.shopee.sg';
 export const sign=(id,path,ts,key)=>createHmac('sha256',key).update(String(id)+path+String(ts)).digest('hex');
 export function config(){const id=process.env.SHOPEE_PARTNER_ID,key=process.env.SHOPEE_PARTNER_KEY,redirect=process.env.SHOPEE_REDIRECT_URL;if(!id||!key||!redirect)throw Error('shopee_config_missing');const u=new URL(redirect);if(u.protocol!=='https:'||u.hostname!=='escritoriofixar.vercel.app'||u.pathname!=='/api/shopee/callback')throw Error('shopee_redirect_invalid');return {id,key,redirect};}
 export async function db(path,{method='GET',body,prefer}={}){const url=process.env.SUPABASE_URL;const key=process.env.SUPABASE_SECRET_KEY;if(!url||!key)throw Error('supabase_missing');const r=await fetch(url+'/rest/v1/'+path,{method,headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json',...(prefer?{Prefer:prefer}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(9000)});if(!r.ok)throw Error('database_error_'+r.status);if(r.status===204)return null;const t=await r.text();return t?JSON.parse(t):null;}
