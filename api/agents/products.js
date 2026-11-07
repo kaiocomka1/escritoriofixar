@@ -120,11 +120,16 @@ async function autoOptimizeSandbox(req,res){
   if(!items.length)return res.status(200).json({results:[],message:'Nenhum produto ativo na Sandbox'});
   const detail=await call('/api/v2/product/get_item_base_info','GET',{item_id_list:items.map(x=>x.item_id).join(',')});
   const products=(detail.item_list||[]).filter(p=>items.some(x=>String(x.item_id)===String(p.item_id))).slice(0,maxItems);
+  let recentChanges=[];
+  try{recentChanges=await db('product_agent_changes?store_id=eq.'+shop.id+'&select=item_id,created_at,status&order=created_at.desc&limit=100');}
+  catch{return res.status(503).json({error:'audit_table_not_ready',hint:'Execute a migração 003 no Supabase antes de habilitar alterações automáticas'});}
+  const cooldown=24*60*60*1000;
   const model=(process.env.GEMINI_MODEL||'gemini-3.5-flash-lite').replace(/^models\//,'');
   for(const p of products){
    const oldTitle=String(p.item_name||'').trim();
    const itemId=Number(p.item_id);
    if(!oldTitle||!Number.isSafeInteger(itemId)){report.push({itemId,status:'skipped',reason:'Produto inválido'});continue;}
+   if(recentChanges.some(x=>String(x.item_id)===String(itemId)&&Date.now()-Date.parse(x.created_at)<cooldown)){report.push({itemId,oldTitle,status:'skipped',reason:'Proteção: anúncio já processado nas últimas 24 horas'});continue;}
    const description=String(p.description||'').trim();
    const imageUrl=p.image?.image_url_list?.[0]||null;
    const prompt=[
@@ -164,6 +169,9 @@ async function autoOptimizeSandbox(req,res){
     const normalizedNew=title.toLowerCase().replace(/\\s+/g,'');
     if(criticalTokens.some(token=>!normalizedNew.includes(token))){report.push({itemId,oldTitle,newTitle:title,status:'skipped',reason:'Título proposto omitiu medida ou quantidade presente no cadastro'});continue;}
     if(title.toLocaleLowerCase('pt-BR')===oldTitle.toLocaleLowerCase('pt-BR')){report.push({itemId,oldTitle,newTitle:title,status:'unchanged'});continue;}
+    const auditRows=await db('product_agent_changes?select=id',{method:'POST',prefer:'return=representation',body:{store_id:shop.id,item_id:itemId,previous_title:oldTitle,new_title:title,status:'failed'}});
+    const auditId=auditRows?.[0]?.id;
+    if(!auditId)throw Error('Não foi possível registrar alteração no histórico');
     await call('/api/v2/product/update_item','POST',{}, {item_id:itemId,item_name:title});
     let saved='';
     for(let attempt=0;attempt<3;attempt++){
@@ -173,11 +181,7 @@ async function autoOptimizeSandbox(req,res){
      if(saved===title)break;
     }
     const status=saved===title?'verified':'submitted_unverified';
-    let auditId=null;
-    try{
-     const rows=await db('product_agent_changes?select=id',{method:'POST',prefer:'return=representation',body:{store_id:shop.id,item_id:itemId,previous_title:oldTitle,new_title:title,status}});
-     auditId=rows?.[0]?.id||null;
-    }catch{}
+    await db('product_agent_changes?id=eq.'+auditId,{method:'PATCH',prefer:'return=minimal',body:{status}});
     report.push({itemId,oldTitle,newTitle:title,status,savedTitle:saved||null,auditId,reason:saved===title?null:'A API não confirmou o novo título após três consultas'});
    }catch(e){report.push({itemId,oldTitle,status:'failed',reason:String(e.message||e).slice(0,200)});}
   }
