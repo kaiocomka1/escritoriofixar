@@ -1,6 +1,6 @@
 import {apiBase,config,db,accessTokenForStore,shopSign} from '../_lib/shopee.js';
 import {requireAdmin} from '../_lib/admin.js';
-const SYSTEM='Você é o Agente de Produtos do Fixar+ AI Office, especialista em anúncios de marketplace brasileiro, principalmente Shopee. Responda em português do Brasil, de forma prática e concisa. Ajude com SEO, títulos, descrições, objeções, precificação e conversão. Nunca invente dados de vendas, taxas ou métricas. Não alegue ter consultado a Shopee quando não houver dados fornecidos. Não execute alterações, publicações ou ações fiscais. Evite promessas sem comprovação, como capacidade de carga não testada. Quando faltar dado importante, solicite-o.';
+const SYSTEM='Você é o Agente de Produtos do Fixar+ AI Office, especialista em anúncios de marketplace brasileiro, principalmente Shopee. Responda em português do Brasil, de forma prática e concisa. Ajude com SEO, títulos, descrições, objeções, precificação e conversão. Nunca invente dados de vendas, taxas ou métricas. Não alegue ter consultado a Shopee quando não houver dados fornecidos. Você possui ferramentas integradas para consultar o catálogo e otimizar títulos na Shopee Sandbox. Nunca peça ao administrador que copie títulos ou descrições já disponíveis pela integração. Se o pedido for sobre anúncios da loja, consulte os dados disponíveis. Somente declare uma alteração executada quando a ferramenta retornar confirmação. Não realize ações fiscais. Evite promessas sem comprovação, como capacidade de carga não testada. Quando faltar dado importante, solicite-o.';
 export default async function handler(req,res){
  res.setHeader('Cache-Control','no-store');
  if(req.method!=='POST')return res.status(405).json({error:'method_not_allowed'});
@@ -14,9 +14,11 @@ export default async function handler(req,res){
  const {message,history=[]}=req.body||{};
  if(typeof message!=='string'||!message.trim()||message.length>4000||!Array.isArray(history))return res.status(400).json({error:'invalid_message'});
  const command=message.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');
- const asksOptimize=/\\b(otimiz|melhor|aprimor|reescrev|ajust|revis)\\w*/.test(command)&&/\\b(anunci|titulo|produto|catalogo|seo)\\w*/.test(command);
- const asksHistory=/\\b(historico|alteracoes|mudancas|o que mudou)\\b/.test(command);
- const asksPreview=/\\b(simul|suger|propost|sem publicar|sem alterar|antes de publicar|analise primeiro)\\w*/.test(command);
+ const mentionsCatalog=/(shopee|anunci|titulo|produto|catalog|seo|listagem)/.test(command);
+ const requestsImprovement=/(otimiz|melhor|aprimor|reescrev|ajust|revis|analis|avali|audit|suger|sugir|sugest|corrig|oportunidade)/.test(command);
+ const asksOptimize=mentionsCatalog&&requestsImprovement;
+ const asksHistory=/(historico|alterac|mudanc|o que mudou)/.test(command);
+ const asksPreview=/(simul|suger|sugir|sugest|propost|sem publicar|sem alterar|nao publi|nao alter|antes de publicar|analise primeiro|avali|audit|analis|oportunidade)/.test(command)&&!/(pode publicar|publique|publicar agora|aplique|execute|otimize agora)/.test(command);
  if(process.env.SHOPEE_ENV==='sandbox'&&asksOptimize){
   const result=await invokeAgentAction(autoOptimizeSandbox,req,{...req.body,action:'auto_optimize_sandbox',preview:asksPreview});
   if(result.status!==200)return res.status(result.status).json(result.data);
@@ -30,7 +32,7 @@ export default async function handler(req,res){
   const rows=result.data.changes||[];
   return res.status(200).json({answer:rows.length?'Últimas alterações:\\n'+rows.slice(0,10).map(x=>'#'+x.item_id+' · '+x.status+' · '+x.new_title).join('\\n'):'Ainda não há alterações registradas.',operation:'history'});
  }
- const {includeShopee=false}=req.body||{};
+ const includeShopee=req.body?.includeShopee===true||mentionsCatalog;
  let shopeeContext='';
  let shopeeInfo=null;
  if(includeShopee){
