@@ -18,3 +18,22 @@ test('Alex delegates a real model call with specialist tools',async()=>{let n=0;
 function response(){return {code:200,setHeader(){},status(n){this.code=n;return this;},json(x){this.body=x;return this;}};}
 test('API unauthenticated mutation is rejected',async()=>{const r=response();await handler({method:'POST',headers:{},body:{action:'edit_sandbox_title'}},r);assert.equal(r.code,401);});
 test('non admin and unavailable role lookup fail closed',async t=>{process.env.SUPABASE_URL='https://example.test';process.env.SUPABASE_SECRET_KEY='test';let n=0;t.mock.method(globalThis,'fetch',async()=>({ok:true,json:async()=>++n===1?{id:'user'}:[{role:'viewer'}]}));const r=response();assert.equal(await requireAdmin({headers:{authorization:'Bearer test'}},r),null);assert.equal(r.code,403);});
+
+test('Thor proposes an edit without writing, even if the chat context allows writes',async()=>{
+ const args={itemId:42,title:'Novo título',expectedTitle:'Título original'};
+ const r=await runAgent({agentId:'thor',message:'Altere o título',context:{allowWrites:true}},{
+  operations:{edit:()=>assert.fail('Chat must not write')},
+  generate:async()=>({candidates:[{content:{parts:[{functionCall:{name:'edit_title',args}}]}}]})
+ });
+ assert.deepEqual(r.proposal,{action:'edit_sandbox_title',...args});
+});
+test('Thor shows both audited titles before proposing an undo',async()=>{
+ const r=await runAgent({agentId:'thor',message:'Desfaça a alteração 2'},{
+  operations:{
+   undo:()=>assert.fail('Chat must not write'),
+   history:async()=>({changes:[{id:2,item_id:42,status:'verified',new_title:'Novo título',previous_title:'Título original'}]})
+  },
+  generate:async()=>({candidates:[{content:{parts:[{functionCall:{name:'undo_change',args:{changeId:2}}}]}}]})
+ });
+ assert.deepEqual(r.proposal,{action:'undo_product_change',changeId:2,itemId:42,expectedTitle:'Novo título',title:'Título original'});
+});
