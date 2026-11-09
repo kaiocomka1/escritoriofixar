@@ -29,17 +29,24 @@ const adsTerms=/\b(?:ads|publicidade|midia|trafego pago|anuncios)\b/;
 const unknownAds=/\b(?:desconhecid\w*|nao (?:sei|informad\w*|foi informad\w*|tenho)|a confirmar)\b/;
 const explicitlyUnknownAds=text=>normalizeEvidence(text).split(/[!?;\n]|\.(?!\d)/).some(sentence=>adsTerms.test(sentence)&&unknownAds.test(sentence));
 const askAds='Qual é o gasto de Ads por pedido em reais ou em percentual da venda? Se for zero, pode me dizer. Preciso desse valor para avaliar a margem de 15%.';
-const zeroCostLabels={
+const pricingInputLabels={
  materialCost:'(?:custo (?:de|do) )?material(?: do kit)?',packagingCost:'embalagem',
  laborCost:'mao de obra',overheadCost:'(?:despesas|custos) indiret[oa]s?',fixedMarketplaceFee:'(?:tarifa|taxa) fixa(?: do marketplace)?',
  shippingCost:'frete',otherFixedCost:'outros (?:custos )?fixos',marketplaceRate:'comissao(?: do marketplace)?',
- taxRate:'imposto',affiliateRate:'(?:taxa de )?afiliado',couponRate:'(?:taxa de )?cupom',returnsReserveRate:'reserva de devolucoes'
+ taxRate:'imposto',affiliateRate:'(?:taxa de )?afiliado',couponRate:'(?:taxa de )?cupom',returnsReserveRate:'reserva de devolucoes',
+ candidatePrice:'(?:preco (?:de venda|atual|do kit)|venda de um kit por|kit vendido a)'
 };
 function pricingArgsFromMessage(args,message){
  const source=normalizeEvidence(message);
  const values={...args};
- for(const [key,label]of Object.entries(zeroCostLabels)){
-  if(values[key]===undefined&&new RegExp('\\b'+label+'\\s*(?::|=|e)\\s*(?:r\\$\\s*)?(?:zero\\b|0(?:[,.]0+)?(?![\\d,.]\\d|\\d))').test(source))values[key]=0;
+ for(const [key,label]of Object.entries(pricingInputLabels)){
+  const rate=key.endsWith('Rate');
+  const number='(\\d+(?:[,.]\\d+)?)';
+  const amount=rate?number+'\\s*(?:%|por cento)':'r\\$\\s*'+number;
+  const pattern=new RegExp('\\b'+label+'\\s*(?::|=|e|de)?\\s*(?:'+amount+'|zero\\b)','g');
+  const matches=[...source.matchAll(pattern)];
+  const parsed=new Set(matches.map(match=>Number((match[1]||'0').replace(',','.'))/(rate?100:1)));
+  if(parsed.size===1)values[key]=parsed.values().next().value;
  }
  const ads=[...source.matchAll(/\b(?:ads|publicidade|midia|trafego pago)(?: ja gasto)?\s*(?::|=|e)?\s*(?:r\$\s*(\d+(?:[,.]\d+)?)|(\d+(?:[,.]\d+)?)\s*(%|reais\b)|zero\b)/g)];
  if(ads.length===1&&!explicitlyUnknownAds(message)){

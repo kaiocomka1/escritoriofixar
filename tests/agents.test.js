@@ -5,12 +5,12 @@ import {runAgent,executeTool,permissions} from '../api/_lib/agent-tools.js';
 import {requireAdmin} from '../api/_lib/admin.js';
 import handler from '../api/agents/products.js';
 const costs={materialCost:5.1,packagingCost:0.5,laborCost:0,overheadCost:0,fixedMarketplaceFee:4,shippingCost:0,otherFixedCost:0,marketplaceRate:0.2,taxRate:0.045,adsRate:0,affiliateRate:0,couponRate:0,returnsReserveRate:0};
-test('Rarissa preserves explicit Ads and zero rates the model omitted',async()=>{
+test('Rarissa preserves explicit Ads, zero rates and a nonzero cost the model dropped',async()=>{
  const {adsRate,affiliateRate,couponRate,...partial}=costs;
  let turn=0;
- const result=await runAgent({agentId:'rarissa',message:'Ads: R$ 0 por pedido. Taxa de afiliado: 0%. Taxa de cupom: 0%.'},{
+ const result=await runAgent({agentId:'rarissa',message:'Ads: R$ 0 por pedido. Taxa de afiliado: 0%. Taxa de cupom: 0%. Embalagem R$ 0,50.'},{
   generate:async()=>({candidates:[{content:{parts:++turn===1?
-   [{functionCall:{name:'evaluate_pricing',args:{...partial,candidatePrice:15.86}}}]:
+   [{functionCall:{name:'evaluate_pricing',args:{...partial,packagingCost:0,candidatePrice:15.86}}}]:
    [{text:'Margem abaixo de 15%.'}]}}]})
  });
  assert.equal(result.tools[0].result.reason,'below_minimum_margin');
