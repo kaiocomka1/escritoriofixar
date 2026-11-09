@@ -6,14 +6,20 @@ import {requireAdmin} from '../api/_lib/admin.js';
 import handler from '../api/agents/products.js';
 const costs={materialCost:5.1,packagingCost:0.5,laborCost:0,overheadCost:0,fixedMarketplaceFee:4,shippingCost:0,otherFixedCost:0,marketplaceRate:0.2,taxRate:0.045,adsRate:0,affiliateRate:0,couponRate:0,returnsReserveRate:0};
 test('Rarissa cannot turn unknown Ads into zero or reuse it from a previous scenario',async()=>{
+ const unknown=await runAgent({agentId:'rarissa',message:'O gasto com Ads é desconhecido.',history:[{role:'user',text:'Ads zero'}]},{
+  generate:async()=>assert.fail('Unknown Ads must not require Gemini')
+ });
+ assert.equal(unknown.tools[0].result.reason,'ads_cost_unconfirmed');
+ assert.match(unknown.answer,/Qual é o gasto de Ads/);
  let turn=0;
- const result=await runAgent({agentId:'rarissa',message:'O gasto com Ads é desconhecido.',history:[{role:'user',text:'Ads zero'}]},{
+ const result=await runAgent({agentId:'rarissa',message:'Avalie a margem deste pedido.'},{
   generate:async()=>({candidates:[{content:{parts:++turn===1?
    [{functionCall:{name:'evaluate_pricing',args:{...costs,candidatePrice:22.9,adsEvidence:'Ads zero'}}}]:
    [{text:'Cenário aprovado.'}]}}]})
  });
  assert.equal(result.tools[0].result.reason,'ads_cost_unconfirmed');
  assert.match(result.answer,/Qual é o gasto de Ads/);
+ assert.equal(turn,1);
 });
 test('Rarissa separates the total Ads limit and remaining budget per kit order',()=>{
  const {adsRate,...otherCosts}=costs;

@@ -28,6 +28,7 @@ const normalizeEvidence=text=>text.normalize('NFD').replace(/\p{Diacritic}/gu,''
 const adsTerms=/\b(?:ads|publicidade|midia|trafego pago|anuncios)\b/;
 const unknownAds=/\b(?:desconhecid\w*|nao (?:sei|informad\w*|foi informad\w*|tenho)|a confirmar)\b/;
 const explicitlyUnknownAds=text=>normalizeEvidence(text).split(/[!?;\n]|\.(?!\d)/).some(sentence=>adsTerms.test(sentence)&&unknownAds.test(sentence));
+const askAds='Qual é o gasto de Ads por pedido em reais ou em percentual da venda? Se for zero, pode me dizer. Preciso desse valor para avaliar a margem de 15%.';
 function adsGrounded(args,message,history){
  const current=normalizeEvidence(message);
  if(explicitlyUnknownAds(message))return false;
@@ -73,8 +74,11 @@ export async function executeTool(agentId,name,args={},context={},dependencies={
 }
 export async function runAgent({agentId,message,history=[],context={}},dependencies={}){
  if(!Object.hasOwn(roles,agentId))throw Error('invalid_agent');
- const key=process.env.GEMINI_API_KEY;if(!key&&!dependencies.generate)throw Error('gemini_key_not_configured');
  const model=(process.env.GEMINI_MODEL||'gemini-3.5-flash-lite').replace(/^models\//,'');
+ if(agentId==='rarissa'&&explicitlyUnknownAds(message)){
+  return {answer:askAds,model,tools:[{name:'pricing_validation',result:{approved:false,reason:'ads_cost_unconfirmed',minMarginPercent:15}}]};
+ }
+ const key=process.env.GEMINI_API_KEY;if(!key&&!dependencies.generate)throw Error('gemini_key_not_configured');
  const contents=history.slice(-8).filter(x=>x&&['user','model'].includes(x.role)&&typeof x.text==='string').map(x=>({role:x.role,parts:[{text:x.text.slice(0,4000)}]}));
  contents.push({role:'user',parts:[{text:message}]});
  const trace=[];
@@ -85,8 +89,6 @@ export async function runAgent({agentId,message,history=[],context={}},dependenc
   if(!content?.parts?.length)throw Error('empty_gemini_response');
   const calls=content.parts.filter(p=>p.functionCall);
   if(!calls.length){
-   const lastPricing=trace.filter(entry=>entry.name==='evaluate_pricing').at(-1)?.result;
-   if(lastPricing?.reason==='ads_cost_unconfirmed'||(agentId==='rarissa'&&explicitlyUnknownAds(message)))return {answer:'Qual é o gasto de Ads por pedido em reais ou em percentual da venda? Se for zero, pode me dizer. Preciso desse valor para avaliar a margem de 15%.',model,tools:trace};
    const answer=content.parts.filter(p=>!p.thought).map(p=>p.text||'').join('').trim();
    if(!answer)throw Error('empty_gemini_response');
    return {answer,model,tools:trace};
@@ -119,6 +121,7 @@ export async function runAgent({agentId,message,history=[],context={}},dependenc
     result=await executeTool(agentId,c.name,args,{...context,allowWrites:false},dependencies);
    }
    trace.push({name:c.name,result});
+   if(result.reason==='ads_cost_unconfirmed')return {answer:askAds,model,tools:trace};
    parts.push({functionResponse:{name:c.name,...(c.id?{id:c.id}:{}),response:result}});
   }
   contents.push({role:'user',parts});
