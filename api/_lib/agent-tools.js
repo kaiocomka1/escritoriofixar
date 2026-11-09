@@ -29,6 +29,29 @@ const adsTerms=/\b(?:ads|publicidade|midia|trafego pago|anuncios)\b/;
 const unknownAds=/\b(?:desconhecid\w*|nao (?:sei|informad\w*|foi informad\w*|tenho)|a confirmar)\b/;
 const explicitlyUnknownAds=text=>normalizeEvidence(text).split(/[!?;\n]|\.(?!\d)/).some(sentence=>adsTerms.test(sentence)&&unknownAds.test(sentence));
 const askAds='Qual é o gasto de Ads por pedido em reais ou em percentual da venda? Se for zero, pode me dizer. Preciso desse valor para avaliar a margem de 15%.';
+const zeroCostLabels={
+ materialCost:'(?:custo (?:de|do) )?material(?: do kit)?',packagingCost:'embalagem',
+ laborCost:'mao de obra',overheadCost:'(?:despesas|custos) indiret[oa]s?',fixedMarketplaceFee:'(?:tarifa|taxa) fixa(?: do marketplace)?',
+ shippingCost:'frete',otherFixedCost:'outros (?:custos )?fixos',marketplaceRate:'comissao(?: do marketplace)?',
+ taxRate:'imposto',affiliateRate:'(?:taxa de )?afiliado',couponRate:'(?:taxa de )?cupom',returnsReserveRate:'reserva de devolucoes'
+};
+function pricingArgsFromMessage(args,message){
+ const source=normalizeEvidence(message);
+ const values={...args};
+ for(const [key,label]of Object.entries(zeroCostLabels)){
+  if(values[key]===undefined&&new RegExp('\\b'+label+'\\s*(?::|=|e)\\s*(?:r\\$\\s*)?(?:zero\\b|0(?:[,.]0+)?(?![\\d,.]\\d|\\d))').test(source))values[key]=0;
+ }
+ const ads=[...source.matchAll(/\b(?:ads|publicidade|midia|trafego pago)(?: ja gasto)?\s*(?::|=|e)?\s*(?:r\$\s*(\d+(?:[,.]\d+)?)|(\d+(?:[,.]\d+)?)\s*(%|reais\b)|zero\b)/g)];
+ if(ads.length===1&&!explicitlyUnknownAds(message)){
+  const [quote,brl,number,unit]=ads[0];
+  delete values.adsRate;
+  delete values.adsCostPerOrder;
+  if(unit==='%')values.adsRate=Number(number.replace(',','.'))/100;
+  else values.adsCostPerOrder=Number((brl||number||'0').replace(',','.'));
+  values.adsEvidence=quote;
+ }
+ return values;
+}
 function adsGrounded(args,message,history){
  const current=normalizeEvidence(message);
  if(explicitlyUnknownAds(message))return false;
@@ -98,7 +121,8 @@ export async function runAgent({agentId,message,history=[],context={}},dependenc
   contents.push(content);
   const parts=[];
   for(const {functionCall:c}of calls){
-   const args=c.args||{};
+   const rawArgs=c.args||{};
+   const args=c.name==='evaluate_pricing'&&valid(c.name,rawArgs)?pricingArgsFromMessage(rawArgs,message):rawArgs;
    const isWrite=c.name==='edit_title'||c.name==='undo_change';
    let result;
    if(c.name==='evaluate_pricing'&&permissions[agentId]?.includes(c.name)&&
