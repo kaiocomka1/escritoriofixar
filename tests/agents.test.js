@@ -5,6 +5,28 @@ import {runAgent,executeTool,permissions} from '../api/_lib/agent-tools.js';
 import {requireAdmin} from '../api/_lib/admin.js';
 import handler from '../api/agents/products.js';
 const costs={materialCost:5.1,packagingCost:0.5,laborCost:0,overheadCost:0,fixedMarketplaceFee:4,shippingCost:0,otherFixedCost:0,marketplaceRate:0.2,taxRate:0.045,adsRate:0,affiliateRate:0,couponRate:0,returnsReserveRate:0};
+test('Rarissa separates the total Ads limit and remaining budget per kit order',()=>{
+ const {adsRate,...otherCosts}=costs;
+ const rate=evaluatePricing({...costs,adsRate:0.1,candidatePrice:22.9});
+ const fixed=evaluatePricing({...otherCosts,adsCostPerOrder:2.29,candidatePrice:22.9});
+ for(const result of [rate,fixed]){
+  assert.equal(result.approved,true);
+  assert.equal(result.projectedProfit,5.4);
+  assert.equal(result.currentAdsCostPerOrder,2.29);
+  assert.equal(result.maxAdsCostPerOrder,4.25);
+  assert.equal(result.additionalAdsBudgetPerOrder,1.96);
+ }
+ assert.equal(evaluatePricing({...costs,adsCostPerOrder:0,candidatePrice:22.9}).reason,'duplicate_ads_cost');
+ assert.deepEqual(evaluatePricing({...otherCosts,candidatePrice:22.9}).missing,['adsRate']);
+ assert.equal(evaluatePricing({...otherCosts,adsCostPerOrder:0,candidatePrice:22.9}).approved,true);
+ assert.equal(evaluatePricing({...otherCosts,adsCostPerOrder:4.25,candidatePrice:22.9}).approved,true);
+ assert.equal(evaluatePricing({...otherCosts,adsCostPerOrder:4.26,candidatePrice:22.9}).approved,false);
+ const blocked=evaluatePricing({...costs,candidatePrice:15.86});
+ assert.equal(blocked.approved,false);
+ assert.equal(blocked.canMeetTargetWithoutAds,false);
+ assert.equal(blocked.maxAdsCostPerOrder,0);
+ assert.equal(blocked.profitShortfallToTarget,0.01);
+});
 test('minimum price includes fixed fee and 15% margin: 15.87, not 13.87',()=>{assert.equal(evaluatePricing({...costs,candidatePrice:13.87}).approved,false);const r=evaluatePricing({...costs,candidatePrice:15.87});assert.equal(r.minPrice,15.87);assert.equal(r.approved,true);assert.equal(evaluatePricing({...costs,candidatePrice:15.86}).approved,false);});
 test('missing, negative, NaN, infinite costs fail closed',()=>{for(const value of [undefined,-1,NaN,Infinity,'0'])assert.equal(evaluatePricing({...costs,laborCost:value,candidatePrice:30}).approved,false);});
 test('invalid rates, infeasible costs, zero and fractional cents rejected',()=>{for(const v of [0,NaN,Infinity,-1,15.871])assert.equal(evaluatePricing({...costs,candidatePrice:v}).approved,false);assert.equal(evaluatePricing({...costs,adsRate:0.7,candidatePrice:100}).approved,false);assert.equal(evaluatePricing({...costs,taxRate:4.5,candidatePrice:100}).approved,false);});

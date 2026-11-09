@@ -4,15 +4,15 @@ export const roles={thor:'Produtos',rarissa:'Financeiro',arthur:'Marketing',penh
 const num={type:'number'},str={type:'string'};
 const roleInstructions={
  thor:'Consulte o catálogo para fundamentar sugestões. Para editar, use o título atual exato. Para desfazer, consulte o histórico e use o ID da alteração. A escrita proposta depende de confirmação no chat.',
- rarissa:'Separe custos em reais de taxas fracionárias. Passe cada valor explicitamente informado, inclusive zero, à ferramenta. Se o usuário disser que os demais custos ou taxas são zero, inclua zero nos campos correspondentes.',
+ rarissa:'Separe custos em reais de taxas fracionárias. Use uma unidade consistente: para um kit, informe o custo do kit inteiro e o preço de um kit. Passe cada valor informado, inclusive zero. Se os demais custos ou taxas forem explicitamente zero, preencha esses campos com zero. Para Ads, use adsCostPerOrder se informado em reais por pedido, ou adsRate se informado como percentual da venda, nunca os dois. Peça em linguagem simples somente os dados que a ferramenta apontar como ausentes. Informe lucro, margem projetada, preço mínimo e teto total de Ads por pedido conforme a ferramenta. Distinga teto total de orçamento adicional. Se canMeetTargetWithoutAds for falso, explique que nem com Ads zero a meta é atingida. Com approved falso, informe que o cenário não foi aprovado.',
  arthur:'Calcule ROAS, ponto de equilíbrio e resultado com os dados fornecidos. Indique quais números faltam para recomendar uma mudança de campanha.',
  penha:'Use o catálogo para identificar o item. Peça vendas médias, prazo de reposição, estoque atual e estoque de segurança antes de projetar uma compra.',
  isaura:'Use a consulta de pedidos para informar o que está pronto para envio e indique o período coberto pela ferramenta.',
  alex:'Delegue ao especialista quando a tarefa exigir uma análise de sua área. Resuma as conclusões e proponha os próximos passos com base nos resultados retornados.'
 };
-const pricingKeys=['materialCost','packagingCost','laborCost','overheadCost','fixedMarketplaceFee','shippingCost','otherFixedCost','marketplaceRate','taxRate','adsRate','affiliateRate','couponRate','returnsReserveRate','candidatePrice'];
+const pricingKeys=['materialCost','packagingCost','laborCost','overheadCost','fixedMarketplaceFee','shippingCost','otherFixedCost','marketplaceRate','taxRate','adsRate','adsCostPerOrder','affiliateRate','couponRate','returnsReserveRate','candidatePrice'];
 const specs={
- evaluate_pricing:{description:'Avalia preço e margem líquida mínima de 15% usando custos BRL e taxas fracionárias explicitamente informados. Inclua zeros informados explicitamente; deixe de fora valores ausentes.',properties:Object.fromEntries(pricingKeys.map(k=>[k,num])),required:[]},
+ evaluate_pricing:{description:'Avalia preço, margem líquida projetada e teto de Ads por pedido para preservar 15%. Use custos em BRL por pedido e taxas fracionárias. Informe Ads por adsRate ou adsCostPerOrder. Inclua zeros informados explicitamente; deixe de fora valores ausentes.',properties:Object.fromEntries(pricingKeys.map(k=>[k,num])),required:[]},
  catalog:{description:'Consulta até 10 produtos reais da Shopee Sandbox; inclui estoque quando disponível.',properties:{}},
  orders:{description:'Consulta até 10 pedidos prontos para envio dos últimos 7 dias na Sandbox. Não despacha pedidos.',properties:{}},
  change_history:{description:'Consulta histórico auditado de alterações na Sandbox.',properties:{}},
