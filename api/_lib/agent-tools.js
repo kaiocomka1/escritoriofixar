@@ -12,7 +12,7 @@ const roleInstructions={
 };
 const pricingKeys=['materialCost','packagingCost','laborCost','overheadCost','fixedMarketplaceFee','shippingCost','otherFixedCost','marketplaceRate','taxRate','adsRate','adsCostPerOrder','affiliateRate','couponRate','returnsReserveRate','candidatePrice'];
 const specs={
- evaluate_pricing:{description:'Avalia preço, margem líquida projetada e teto de Ads por pedido para preservar 15%. Use custos em BRL por pedido e taxas fracionárias. Informe Ads por adsRate ou adsCostPerOrder. Inclua zeros informados explicitamente; deixe de fora valores ausentes.',properties:Object.fromEntries(pricingKeys.map(k=>[k,num])),required:[]},
+ evaluate_pricing:{description:'Avalia preço, margem líquida projetada e teto de Ads por pedido para preservar 15%. Use custos em BRL por pedido e taxas fracionárias. Informe Ads por adsRate ou adsCostPerOrder e copie literalmente em adsEvidence o trecho da mensagem do usuário que confirma esse valor. Deixe Ads ausente se desconhecido. Inclua zeros apenas quando informados explicitamente.',properties:{...Object.fromEntries(pricingKeys.map(k=>[k,num])),adsEvidence:str},required:[]},
  catalog:{description:'Consulta até 10 produtos reais da Shopee Sandbox; inclui estoque quando disponível.',properties:{}},
  orders:{description:'Consulta até 10 pedidos prontos para envio dos últimos 7 dias na Sandbox. Não despacha pedidos.',properties:{}},
  change_history:{description:'Consulta histórico auditado de alterações na Sandbox.',properties:{}},
@@ -24,6 +24,24 @@ const specs={
 };
 export const permissions={thor:['catalog','change_history','edit_title','undo_change'],rarissa:['evaluate_pricing'],arthur:['analyze_ads','catalog'],penha:['catalog','plan_stock'],isaura:['orders'],alex:['catalog','orders','change_history','evaluate_pricing','delegate']};
 export function declarations(agentId){return (permissions[agentId]||[]).map(name=>({name,description:specs[name].description,parameters:{type:'object',properties:specs[name].properties,required:specs[name].required||Object.keys(specs[name].properties)}}));}
+const normalizeEvidence=text=>text.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().replace(/\s+/g,' ').trim();
+const adsTerms=/\b(?:ads|publicidade|midia|trafego pago|anuncios)\b/;
+const unknownAds=/\b(?:desconhecid\w*|nao (?:sei|informad\w*|foi informad\w*|tenho)|a confirmar)\b/;
+const explicitlyUnknownAds=text=>normalizeEvidence(text).split(/[!?;\n]|\.(?!\d)/).some(sentence=>adsTerms.test(sentence)&&unknownAds.test(sentence));
+function adsGrounded(args,message,history){
+ const current=normalizeEvidence(message);
+ if(explicitlyUnknownAds(message))return false;
+ if(typeof args.adsEvidence!=='string'||args.adsEvidence.length>240)return false;
+ const quote=normalizeEvidence(args.adsEvidence);
+ const userTexts=[current,...history.filter(x=>x?.role==='user'&&typeof x.text==='string').map(x=>normalizeEvidence(x.text))];
+ if(!quote||unknownAds.test(quote)||!userTexts.some(x=>x.includes(quote)))return false;
+ const value=args.adsCostPerOrder??args.adsRate;
+ if(value===0&&!/[1-9]/.test(quote)&&((adsTerms.test(quote)||/\b(?:demais|outros) (?:custos|taxas|despesas)\b/.test(quote))&&/\bzero\b/.test(quote)||/\bsem (?:ads|publicidade|midia|trafego pago)\b/.test(quote)))return true;
+ if(!adsTerms.test(quote))return false;
+ const pattern=args.adsCostPerOrder!==undefined?/(?:r\$\s*(\d+(?:[,.]\d+)?)|(\d+(?:[,.]\d+)?)\s*reais\b)/g:/(\d+(?:[,.]\d+)?)\s*(?:%|por cento)/g;
+ const matches=[...quote.matchAll(pattern)];
+ return matches.length===1&&Math.abs(Number((matches[0][1]||matches[0][2]).replace(',','.'))/(args.adsCostPerOrder!==undefined?1:100)-value)<1e-9;
+}
 function valid(name,args){
  if(!args||typeof args!=='object'||Array.isArray(args))return false;
  const s=specs[name];if(Object.keys(args).some(k=>!Object.hasOwn(s.properties,k)))return false;
@@ -66,7 +84,13 @@ export async function runAgent({agentId,message,history=[],context={}},dependenc
   const content=data.candidates?.[0]?.content;
   if(!content?.parts?.length)throw Error('empty_gemini_response');
   const calls=content.parts.filter(p=>p.functionCall);
-  if(!calls.length){const answer=content.parts.filter(p=>!p.thought).map(p=>p.text||'').join('').trim();if(!answer)throw Error('empty_gemini_response');return {answer,model,tools:trace};}
+  if(!calls.length){
+   const lastPricing=trace.filter(entry=>entry.name==='evaluate_pricing').at(-1)?.result;
+   if(lastPricing?.reason==='ads_cost_unconfirmed'||(agentId==='rarissa'&&explicitlyUnknownAds(message)))return {answer:'Qual é o gasto de Ads por pedido em reais ou em percentual da venda? Se for zero, pode me dizer. Preciso desse valor para avaliar a margem de 15%.',model,tools:trace};
+   const answer=content.parts.filter(p=>!p.thought).map(p=>p.text||'').join('').trim();
+   if(!answer)throw Error('empty_gemini_response');
+   return {answer,model,tools:trace};
+  }
   if(calls.length>4||trace.length+calls.length>8)return {answer:'Limite de operações atingido. Consulte os resultados confirmados antes de continuar.',tools:trace,limited:true};
   // Preserve model content verbatim, including thoughtSignature and call IDs.
   contents.push(content);
@@ -75,7 +99,10 @@ export async function runAgent({agentId,message,history=[],context={}},dependenc
    const args=c.args||{};
    const isWrite=c.name==='edit_title'||c.name==='undo_change';
    let result;
-   if(isWrite&&agentId==='thor'&&!context.depth&&valid(c.name,args)){
+   if(c.name==='evaluate_pricing'&&permissions[agentId]?.includes(c.name)&&
+      !adsGrounded(args,message,history)){
+    result={approved:false,reason:'ads_cost_unconfirmed',minMarginPercent:15};
+   }else if(isWrite&&agentId==='thor'&&!context.depth&&valid(c.name,args)){
     if(c.name==='edit_title'){
      return {answer:'Revise a alteração de título na Sandbox.',model,tools:trace,proposal:{action:'edit_sandbox_title',...args}};
     }

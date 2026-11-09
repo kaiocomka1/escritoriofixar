@@ -5,6 +5,16 @@ import {runAgent,executeTool,permissions} from '../api/_lib/agent-tools.js';
 import {requireAdmin} from '../api/_lib/admin.js';
 import handler from '../api/agents/products.js';
 const costs={materialCost:5.1,packagingCost:0.5,laborCost:0,overheadCost:0,fixedMarketplaceFee:4,shippingCost:0,otherFixedCost:0,marketplaceRate:0.2,taxRate:0.045,adsRate:0,affiliateRate:0,couponRate:0,returnsReserveRate:0};
+test('Rarissa cannot turn unknown Ads into zero or reuse it from a previous scenario',async()=>{
+ let turn=0;
+ const result=await runAgent({agentId:'rarissa',message:'O gasto com Ads é desconhecido.',history:[{role:'user',text:'Ads zero'}]},{
+  generate:async()=>({candidates:[{content:{parts:++turn===1?
+   [{functionCall:{name:'evaluate_pricing',args:{...costs,candidatePrice:22.9,adsEvidence:'Ads zero'}}}]:
+   [{text:'Cenário aprovado.'}]}}]})
+ });
+ assert.equal(result.tools[0].result.reason,'ads_cost_unconfirmed');
+ assert.match(result.answer,/Qual é o gasto de Ads/);
+});
 test('Rarissa separates the total Ads limit and remaining budget per kit order',()=>{
  const {adsRate,...otherCosts}=costs;
  const rate=evaluatePricing({...costs,adsRate:0.1,candidatePrice:22.9});
@@ -33,7 +43,7 @@ test('invalid rates, infeasible costs, zero and fractional cents rejected',()=>{
 test('cent boundary property across 1000 cost scenarios',()=>{for(let i=1;i<=1000;i++){const c={...costs,materialCost:i/37,adsRate:(i%20)/100};const r=evaluatePricing(c);assert.equal(evaluatePricing({...c,candidatePrice:r.minPrice}).approved,true);assert.equal(evaluatePricing({...c,candidatePrice:Math.round((r.minPrice-.01)*100)/100}).approved,false);}});
 test('roles reject unauthorized operations before side effects',async()=>{for(const id of Object.keys(permissions)){if(id!=='thor')assert.equal((await executeTool(id,'edit_title',{})).error,'tool_forbidden');}assert.equal((await executeTool('rarissa','__proto__',{})).error,'tool_forbidden');});
 test('tools validate extra keys and argument types',async()=>{assert.equal((await executeTool('thor','catalog',{url:'evil'})).error,'invalid_tool_arguments');assert.equal((await executeTool('thor','edit_title',{itemId:1.5,title:'Hello',expectedTitle:'old'})).error,'invalid_tool_arguments');});
-test('Rarissa uses actual financial function and sends result back preserving signatures',async()=>{let n=0;const signature={role:'model',parts:[{thoughtSignature:'opaque',functionCall:{id:'c1',name:'evaluate_pricing',args:{...costs,candidatePrice:15.87}}}]};const r=await runAgent({agentId:'rarissa',message:'Calcule o preço'}, {generate:async p=>{n++;if(n===1){assert.ok(p.tools[0].functionDeclarations.some(x=>x.name==='evaluate_pricing'));return {candidates:[{content:signature}]};}assert.deepEqual(p.contents.at(-2),signature);assert.equal(p.contents.at(-1).parts[0].functionResponse.response.minPrice,15.87);return {candidates:[{content:{parts:[{text:'Preço validado pelo motor.'}]}}]};}});assert.equal(n,2);assert.equal(r.tools[0].result.approved,true);});
+test('Rarissa uses actual financial function and sends result back preserving signatures',async()=>{let n=0;const signature={role:'model',parts:[{thoughtSignature:'opaque',functionCall:{id:'c1',name:'evaluate_pricing',args:{...costs,candidatePrice:15.87,adsEvidence:'Ads zero'}}}]};const r=await runAgent({agentId:'rarissa',message:'Calcule o preço. Ads zero.'}, {generate:async p=>{n++;if(n===1){assert.ok(p.tools[0].functionDeclarations.some(x=>x.name==='evaluate_pricing'));return {candidates:[{content:signature}]};}assert.deepEqual(p.contents.at(-2),signature);assert.equal(p.contents.at(-1).parts[0].functionResponse.response.minPrice,15.87);return {candidates:[{content:{parts:[{text:'Preço validado pelo motor.'}]}}]};}});assert.equal(n,2);assert.equal(r.tools[0].result.approved,true);});
 test('natural text does not trigger keyword actions',async()=>{let touched=false;await runAgent({agentId:'thor',message:'Não melhore nem publique meus anúncios'}, {operations:{edit:()=>{touched=true;}},generate:async()=>({candidates:[{content:{parts:[{text:'Nenhuma alteração.'}]}}]})});assert.equal(touched,false);});
 test('tool loop bounded',async()=>{const r=await runAgent({agentId:'thor',message:'Consulte'}, {operations:{catalog:async()=>({items:[]})},generate:async()=>({candidates:[{content:{role:'model',parts:[{functionCall:{name:'catalog',args:{}}}]}}]})});assert.equal(r.limited,true);assert.equal(r.tools.length,5);});
 test('Alex delegates a real model call with specialist tools',async()=>{let n=0;const r=await executeTool('alex','delegate',{agentId:'rarissa',message:'Olá'}, {},{generate:async p=>{n++;assert.ok(p.systemInstruction.parts[0].text.includes('rarissa'));return {candidates:[{content:{parts:[{text:'Olá do financeiro'}]}}]};}});assert.equal(n,1);assert.equal(r.answer,'Olá do financeiro');assert.equal((await executeTool('alex','delegate',{agentId:'thor',message:'oi'},{depth:1})).error,'delegation_limit');});
