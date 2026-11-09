@@ -1,5 +1,5 @@
 import {apiBase,config,db,accessTokenForStore,shopSign} from './shopee.js';
-export function createOperations({database=db,tokenForStore=accessTokenForStore,request=fetch,env=process.env}={}){
+export function createOperations({database=db,tokenForStore=accessTokenForStore,request=fetch,env=process.env,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
  async function connect(){
   if(env.SHOPEE_ENV!=='sandbox')throw Error('sandbox_only');
   // An explicit store binding prevents accidentally using the latest connected live store.
@@ -22,7 +22,7 @@ export function createOperations({database=db,tokenForStore=accessTokenForStore,
  }
  async function current(call,itemId){const d=await call('/api/v2/product/get_item_base_info',{item_id_list:String(itemId)});const item=d.item_list?.find(x=>Number(x.item_id)===itemId);if(!item)throw Error('item_not_found');return item;}
  async function history(){const {store}=await connect();return {changes:await database('product_agent_changes?store_id=eq.'+store.id+'&select=id,item_id,previous_title,new_title,status,created_at,reverted_at&order=created_at.desc&limit=30')};}
- async function edit({itemId,title,expectedTitle},context){
+ async function applyTitle({itemId,title,expectedTitle},context,undoChangeId){
   if(!context.allowWrites||env.SHOPEE_SANDBOX_WRITES_ENABLED!=='true')throw Error('sandbox_writes_disabled');
   const {store,call}=await connect();
   // Durable unique lock: deliberately retained after ambiguous provider outcomes.
@@ -38,19 +38,25 @@ export function createOperations({database=db,tokenForStore=accessTokenForStore,
    const auditId=rows[0].id;
    submitted=true;
    await call('/api/v2/product/update_item',{}, {item_id:itemId,item_name:title});
-   const saved=await current(call,itemId);
+   let saved=await current(call,itemId);
+   for(const delay of [300,800,1600]){
+    if(saved.item_name!==expectedTitle)break;
+    await wait(delay);
+    saved=await current(call,itemId);
+   }
    if(saved.item_name!==title)return {status:'submitted_unverified',auditId,itemId,success:false};
    await database('product_agent_changes?id=eq.'+auditId,{method:'PATCH',body:{status:'verified'}});
+   if(undoChangeId)await database('product_agent_changes?id=eq.'+undoChangeId+'&store_id=eq.'+store.id,{method:'PATCH',body:{status:'reverted',reverted_at:new Date().toISOString()}});
    submitted=false;
    return {success:true,status:'verified',auditId,itemId,title};
   }finally{if(!submitted)await database('agent_product_locks?store_id=eq.'+store.id+'&item_id=eq.'+itemId,{method:'DELETE'});}
  }
+ async function edit(args,context){return applyTitle(args,context);}
  async function undo({changeId},context){
   const {store}=await connect();
   const rows=await database('product_agent_changes?id=eq.'+changeId+'&store_id=eq.'+store.id+'&select=id,item_id,previous_title,new_title,status,reverted_at&limit=1');
   const c=rows?.[0];if(!c||c.status!=='verified'||c.reverted_at)throw Error('change_not_revertible');
-  const result=await edit({itemId:Number(c.item_id),title:c.previous_title,expectedTitle:c.new_title},context);
-  if(result.success)await database('product_agent_changes?id=eq.'+changeId,{method:'PATCH',body:{status:'reverted',reverted_at:new Date().toISOString()}});
+  const result=await applyTitle({itemId:Number(c.item_id),title:c.previous_title,expectedTitle:c.new_title},context,changeId);
   return {...result,restoredTitle:result.success?c.previous_title:undefined};
  }
  return {edit,undo,history,async catalog(){const {call}=await connect();const list=await call('/api/v2/product/get_item_list',{offset:0,page_size:10,item_status:'NORMAL'});const ids=(list.item||[]).map(x=>x.item_id);if(!ids.length)return {items:[],partial:false};const data=await call('/api/v2/product/get_item_base_info',{item_id_list:ids.join(',')});return {items:(data.item_list||[]).map(x=>({itemId:x.item_id,title:x.item_name,description:String(x.description||'').slice(0,1500),stock:x.stock_info_v2||x.stock_info||null})),partial:!!list.has_next_page};},async orders(){const {call}=await connect(),ts=Math.floor(Date.now()/1000);const d=await call('/api/v2/order/get_order_list',{time_range_field:'create_time',time_from:ts-7*86400,time_to:ts,page_size:10,order_status:'READY_TO_SHIP'});return {orders:(d.order_list||[]).map(x=>({orderSn:x.order_sn,status:x.order_status})),partial:!!d.more,windowDays:7};}};
