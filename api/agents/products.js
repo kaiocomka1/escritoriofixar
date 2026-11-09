@@ -1,4 +1,4 @@
-import {runAgent,executeTool,roles} from '../_lib/agent-tools.js';
+import {runAgent,executeTool,roles,sanitizeOfficeContext} from '../_lib/agent-tools.js';
 import {apiBase,config,db,accessTokenForStore,shopSign} from '../_lib/shopee.js';
 import {requireAdmin} from '../_lib/admin.js';
 export default async function handler(req,res){
@@ -25,7 +25,7 @@ export default async function handler(req,res){
   }
   const {message,history=[]}=req.body||{};
   if(typeof message!=='string'||!message.trim()||message.length>4000||!Array.isArray(history))return res.status(400).json({error:'invalid_message'});
-  const result=await runAgent({agentId,message:message+(req.body?.includeShopee===true?'\nSolicito consultar dados da Sandbox quando pertinente.':''),history,context});
+  const result=await runAgent({agentId,message:message+(req.body?.includeShopee===true?'\nSolicito consultar dados da Sandbox quando pertinente.':''),history,context:{...context,officeContext:sanitizeOfficeContext(req.body?.officeContext)}});
   return res.status(200).json(result);
  }catch(e){return res.status(503).json({error:e.code||'agent_unavailable'});}
 }
