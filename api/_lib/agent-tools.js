@@ -1,11 +1,18 @@
 import {evaluatePricing} from './pricing.js';
 import {createOperations} from './operations.js';
+import {analyzeAds} from './ads.js';
 export const roles={thor:'Produtos',rarissa:'Financeiro',arthur:'Marketing',penha:'Estoque',isaura:'Logística',alex:'Gestor Geral'};
 const num={type:'number'},str={type:'string'};
 const roleInstructions={
  thor:'Consulte o catálogo para fundamentar sugestões. Para editar, use o título atual exato. Para desfazer, consulte o histórico e use o ID da alteração. A escrita proposta depende de confirmação no chat.',
  rarissa:'Separe custos em reais de taxas fracionárias. Use uma unidade consistente: para um kit, informe o custo do kit inteiro e o preço de um kit. Passe cada valor informado, inclusive zero. Se os demais custos ou taxas forem explicitamente zero, preencha esses campos com zero. Para Ads, use adsCostPerOrder se informado em reais por pedido, ou adsRate se informado como percentual da venda, nunca os dois. Peça em linguagem simples somente os dados que a ferramenta apontar como ausentes. Informe lucro, margem projetada, preço mínimo e teto total de Ads por pedido conforme a ferramenta. Distinga teto total de orçamento adicional. Se canMeetTargetWithoutAds for falso, explique que nem com Ads zero a meta é atingida. Com approved falso, informe que o cenário não foi aprovado.',
- arthur:'Calcule ROAS, ponto de equilíbrio e resultado com os dados fornecidos. Indique quais números faltam para recomendar uma mudança de campanha.',
+ arthur:[
+  'Você cuida de Shopee Ads Brasil e TikTok Shop Ads. Use analyze_ads para cada cenário. Peça plataforma, modo, SKU, período, receita atribuída e gasto na mesma janela. Diferencie meta configurada, resultado observado e piso financeiro. ROAS/ROI de painel é receita atribuída dividida por gasto, ACoS é o inverso em percentual.',
+  'Para avaliar lucro, use receita financeira dos pedidos válidos e margem de contribuição antes de Ads sobre essa mesma base, ou contribuição em reais. Para simular um kit com custos fornecidos, use evaluate_pricing, o motor da Rarissa. Considere taxas, tributos, devoluções e comissões de afiliados sem duplicar custos. Não trate o ROI de painel como lucro ou venda incremental. Peça dados faltantes e limite de caixa do mesmo período. Não sugira escalar se a margem pós-Ads for inferior a 15%, o caixa for insuficiente ou a base não estiver validada.',
+  'Shopee GMV Max tem Lance Automático e ROAS Personalizado. Meta alta pode reduzir entrega. Impulsão Rápida no ROAS Personalizado pode explorar ROAS até 30% abaixo da meta. Use 70% como cenário de estresse, sem tratar como piso garantido. Proteção de ROAS depende da elegibilidade e é crédito publicitário, não receita nem garantia de margem. Fonte: https://ads.shopee.com.br/learn/faq/217/2233 e https://ads.shopee.com.br/learn/faq/363/2054.',
+  'TikTok Shop Product GMV Max inclui vendas orgânicas, pagas e de afiliados dos produtos anunciados no ROI atribuído. Target ROI otimiza para uma meta. Max Delivery usa orçamento próprio por produto e período; confira o caixa e a janela do teste. A proteção de ROI tem critérios e exclui Max Delivery e orçamento de Creative Boost. Fonte: https://ads.tiktok.com/resources/help/article/about-product-gmv-max e https://ads.tiktok.com/resources/help/article/about-roi-protection-for-gmv-max-campaigns.',
+  'Na Fixar+, use ROAS 25 apenas como referência histórica da Shopee, nunca como regra universal. Com caixa curto, prefira teste com teto, sem presumir que Impulsão Rápida ou Max Delivery sejam vantajosos. Recomende uma ação e o critério para revisar. Separe diagnóstico de entrega, clique, conversão e margem. Não invente limites, dados ou disponibilidade do painel.'
+ ].join(' '),
  penha:'Use o catálogo para identificar o item. Peça vendas médias, prazo de reposição, estoque atual e estoque de segurança antes de projetar uma compra.',
  isaura:'Use a consulta de pedidos para informar o que está pronto para envio e indique o período coberto pela ferramenta.',
  alex:'Delegue ao especialista quando a tarefa exigir uma análise de sua área. Resuma as conclusões e proponha os próximos passos com base nos resultados retornados.'
@@ -19,11 +26,16 @@ const specs={
  edit_title:{description:'Propõe uma edição de título na Sandbox para confirmação do administrador. Consulte antes o título atual exato no catálogo.',properties:{itemId:num,title:str,expectedTitle:str}},
  undo_change:{description:'Propõe desfazer uma alteração verificada na Sandbox para confirmação do administrador.',properties:{changeId:num}},
  plan_stock:{description:'Calcula reposição com dados fornecidos pelo usuário; não altera estoque.',properties:{dailySales:num,days:num,currentStock:num,safetyStock:num}},
- analyze_ads:{description:'Calcula ROAS e resultado após mídia com receita, gasto e margem de contribuição antes da publicidade informados; não altera campanhas.',properties:{revenue:num,spend:num,contributionRate:num}},
+ analyze_ads:{description:'Analisa Ads com receita atribuída (revenue) e gasto (spend) no mesmo período. Para lucro informe financialRevenue (receita dos pedidos válidos na mesma base da contribuição) e contributionBeforeAds em reais ou contributionRate fracionária antes de Ads. Informe caixa disponível para Ads no período em cashLimit, e sameRevenueBasis apenas se receita atribuída e financeira representarem a mesma base. Orders é a contagem do painel; paidConversions somente conversões pagas dos cliques informados. Não invente números.',properties:{
+  revenue:num,spend:num,financialRevenue:num,contributionRate:num,contributionBeforeAds:{type:'number',allowNegative:true},
+  platform:{type:'string',enum:['shopee','tiktok_shop']},mode:{type:'string',enum:['custom_roas','auto_bidding','target_roi','max_delivery']},
+  configuredTarget:num,cashLimit:num,orders:num,impressions:num,clicks:num,paidConversions:num,
+  rapidBoost:{type:'boolean'},sameRevenueBasis:{type:'boolean'}
+ },required:['revenue','spend']},
  delegate:{description:'Consulta outro especialista de verdade. Somente Alex pode delegar. Delegação não concede escrita.',properties:{agentId:{type:'string',enum:['thor','rarissa','arthur','penha','isaura']},message:str}}
 };
-export const permissions={thor:['catalog','change_history','edit_title','undo_change'],rarissa:['evaluate_pricing'],arthur:['analyze_ads','catalog'],penha:['catalog','plan_stock'],isaura:['orders'],alex:['catalog','orders','change_history','evaluate_pricing','delegate']};
-export function declarations(agentId){return (permissions[agentId]||[]).map(name=>({name,description:specs[name].description,parameters:{type:'object',properties:specs[name].properties,required:specs[name].required||Object.keys(specs[name].properties)}}));}
+export const permissions={thor:['catalog','change_history','edit_title','undo_change'],rarissa:['evaluate_pricing'],arthur:['analyze_ads','evaluate_pricing','catalog'],penha:['catalog','plan_stock'],isaura:['orders'],alex:['catalog','orders','change_history','evaluate_pricing','delegate']};
+export function declarations(agentId){return (permissions[agentId]||[]).map(name=>({name,description:specs[name].description,parameters:{type:'object',properties:Object.fromEntries(Object.entries(specs[name].properties).map(([key,{allowNegative,...schema}])=>[key,schema])),required:specs[name].required||Object.keys(specs[name].properties)}}));}
 const normalizeEvidence=text=>text.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().replace(/\s+/g,' ').trim();
 const adsTerms=/\b(?:ads|publicidade|midia|trafego pago|anuncios)\b/;
 const unknownAds=/\b(?:desconhecid\w*|nao (?:sei|informad\w*|foi informad\w*|tenho)|a confirmar)\b/;
@@ -77,11 +89,17 @@ function valid(name,args){
  if(!args||typeof args!=='object'||Array.isArray(args))return false;
  const s=specs[name];if(Object.keys(args).some(k=>!Object.hasOwn(s.properties,k)))return false;
  if((s.required||Object.keys(s.properties)).some(k=>!Object.hasOwn(args,k)))return false;
- for(const [k,v]of Object.entries(args)){const t=s.properties[k];if(typeof v!==t.type||(t.type==='number'&&(!Number.isFinite(v)||v<0))||(t.enum&&!t.enum.includes(v)))return false;}
+ for(const [k,v]of Object.entries(args)){const t=s.properties[k];if(typeof v!==t.type||(t.type==='number'&&(!Number.isFinite(v)||(!t.allowNegative&&v<0)))||(t.enum&&!t.enum.includes(v)))return false;}
  if(name==='edit_title'&&(!Number.isSafeInteger(args.itemId)||args.itemId<=0||args.title.trim().length<5||args.title.length>120||!args.expectedTitle||/[\r\n]/.test(args.title)))return false;
  if(name==='undo_change'&&(!Number.isSafeInteger(args.changeId)||args.changeId<=0))return false;
  if(name==='delegate'&&(!args.message.trim()||args.message.length>4000))return false;
- if(name==='analyze_ads'&&args.contributionRate>1)return false;
+ if(name==='analyze_ads'){
+  const modes={shopee:['custom_roas','auto_bidding'],tiktok_shop:['target_roi','max_delivery']};
+  if(args.contributionRate>1||(args.contributionBeforeAds!==undefined&&args.contributionRate!==undefined))return false;
+  if(args.platform&&args.mode&&!modes[args.platform].includes(args.mode))return false;
+  if(['orders','impressions','clicks','paidConversions'].some(k=>args[k]!==undefined&&!Number.isSafeInteger(args[k])))return false;
+  if(args.clicks>args.impressions||args.paidConversions>args.clicks)return false;
+ }
  return true;
 }
 export async function executeTool(agentId,name,args={},context={},dependencies={}){
@@ -97,7 +115,7 @@ export async function executeTool(agentId,name,args={},context={},dependencies={
    case 'edit_title':return await ops.edit(args,context);
    case 'undo_change':return await ops.undo(args,context);
    case 'plan_stock':{const target=Math.ceil(args.dailySales*args.days+args.safetyStock);return {targetStock:target,reorder:Math.max(0,target-args.currentStock),source:'user_supplied_projection'};}
-   case 'analyze_ads':return {roas:args.spend>0?args.revenue/args.spend:null,breakEvenRoas:args.contributionRate>0?1/args.contributionRate:null,profitAfterAds:Math.round((args.revenue*args.contributionRate-args.spend)*100)/100,source:'user_supplied_projection'};
+   case 'analyze_ads':return analyzeAds(args);
    case 'delegate':if(context.depth)return {error:'delegation_limit'};return await runAgent({agentId:args.agentId,message:args.message,context:{...context,allowWrites:false,depth:1}},dependencies);
   }
  }catch(e){return {error:['sandbox_only','sandbox_store_binding_required','sandbox_store_not_connected','sandbox_writes_disabled','title_changed_since_read','change_not_revertible','item_not_found','audit_required'].includes(e.message)?e.message:'operation_failed_or_unverified'};}
